@@ -30,21 +30,24 @@ onMounted(async () => {
     fadeAnimation: false
   })
 
-  // 初始化時立即同步一次 Zoom Level
-  currentZoom.value = Number(map.getZoom().toFixed(1))
+  // 即時更新 Zoom Level 數值
+  const updateZoom = () => {
+    currentZoom.value = Number(map.getZoom().toFixed(1))
+  }
+  updateZoom()
+  map.on('zoom', updateZoom)
+  map.on('zoomend', updateZoom)
 
   let mapStyle = null
 
+  // 2. 載入並處理底圖 Style (Basemap)
   try {
     const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
     const res = await fetch(styleUrl)
     const textData = await res.text()
-
-    // 2. 修正相對路徑
     const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
     mapStyle = JSON.parse(fixedText)
 
-    // 3. 設定 Source 級別
     if (mapStyle.sources) {
       Object.keys(mapStyle.sources).forEach(key => {
         if (mapStyle.sources[key].type === 'vector') {
@@ -56,20 +59,17 @@ onMounted(async () => {
       })
     }
 
-    // 4. 針對 5K (minzoom: 15) 與 1K (minzoom: 18) 進行分級與圖層排序
+    // 針對底圖進行 5K / 1K 分級，並濾掉底圖內建標籤
     if (mapStyle.layers) {
       const normalLayers = []
       const layer5K = []
       const layer1K = []
-
       mapStyle.layers.forEach(layer => {
         const sourceLayer = (layer['source-layer'] || '').toUpperCase()
         const layerId = (layer.id || '').toLowerCase()
-
         if (layerId.includes('label') || layerId.includes('text') || layer.type === 'symbol') {
           return
         }
-
         if (sourceLayer.includes('1K')) {
           layer.minzoom = 18
           layer1K.push(layer)
@@ -80,33 +80,85 @@ onMounted(async () => {
           normalLayers.push(layer)
         }
       })
-
       mapStyle.layers = [...normalLayers, ...layer5K, ...layer1K]
     }
   } catch (err) {
-    console.error('Failed to load map style:', err)
+    console.error('❌ [Basemap] 載入失敗:', err)
   }
 
-  // 5. 建立 MapLibre 底圖圖層
-  const glLayer = L.maplibreGL({
-    style: mapStyle,
-    maxZoom: 20,
-    transformRequest: (url, resourceType) => {
-      let reqUrl = url
-      if (reqUrl && reqUrl.includes('/fonts/')) {
-        reqUrl = reqUrl.replace(/Arial%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/Arial Regular/g, 'Noto Sans Regular')
-                     .replace(/Arial%20Bold/g, 'Noto%20Sans%20Bold')
-                     .replace(/Arial Bold/g, 'Noto Sans Bold')
-                     .replace(/Arial/g, 'Noto%20Sans%20Regular')
+  // 3. 載入 Label Style 並以獨立的 source ('hk_label') 合併進 mapStyle
+  try {
+    const styLabelUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/styles/root.json'
+    const resLabel = await fetch(styLabelUrl)
+    const textLabelData = await resLabel.text()
+    const fixedLabelText = textLabelData.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
+    const mapLabelStyle = JSON.parse(fixedLabelText)
+
+    // 設定合法的 glyphs
+    mapStyle.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
+
+    // ★ 關鍵修正：將 Label 的 source 命名為獨立的 'hk_label'，避免覆蓋底圖的 source
+    if (mapLabelStyle.sources) {
+      const labelSourceKey = Object.keys(mapLabelStyle.sources)[0] || 'esri'
+      const labelSourceObj = mapLabelStyle.sources[labelSourceKey]
+      
+      if (labelSourceObj) {
+        labelSourceObj.maxzoom = 15
+        labelSourceObj.tiles = [
+          'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf'
+        ]
+        // 註冊到 mapStyle 中
+        mapStyle.sources['hk_label'] = labelSourceObj
+
+        // 將所有 label layer 的 source 指向這個新的 'hk_label'
+        if (mapLabelStyle.layers) {
+          mapLabelStyle.layers.forEach(layer => {
+            layer.source = 'hk_label'
+          })
+        }
       }
-      return { url: reqUrl }
     }
-  })
 
-  glLayer.addTo(map)
+    // 將 Label 的 layers 串接到最尾端（確保畫在最上層）
+    if (mapLabelStyle.layers && mapStyle.layers) {
+      mapStyle.layers = [...mapStyle.layers, ...mapLabelStyle.layers]
+    }
+  } catch (err) {
+    console.error('❌ [Label Style Merge] 失敗:', err)
+  }
 
-  // 6. 載入並管理 GeoJSON 圖層 (結合 Vite base 路徑，避免 GitHub Pages 404)
+  // 字型轉譯攔截器
+  const fontTransform = (url) => {
+    let reqUrl = url
+    if (reqUrl && reqUrl.includes('/fonts/')) {
+      reqUrl = reqUrl.replace(/LianHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
+                   .replace(/LianHeiHK Bold/g, 'Noto Sans Bold')
+                   .replace(/LianHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
+                   .replace(/LianHeiHK Regular/g, 'Noto Sans Regular')
+                   .replace(/CyansHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
+                   .replace(/CyansHeiHK Bold/g, 'Noto Sans Bold')
+                   .replace(/CyansHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
+                   .replace(/CyansHeiHK Regular/g, 'Noto Sans Regular')
+                   .replace(/Arial%20Regular/g, 'Noto%20Sans%20Regular')
+                   .replace(/Arial Regular/g, 'Noto Sans Regular')
+                   .replace(/Arial%20Bold/g, 'Noto%20Sans%20Bold')
+                   .replace(/Arial Bold/g, 'Noto Sans Bold')
+                   .replace(/Arial/g, 'Noto%20Sans%20Regular')
+    }
+    return { url: reqUrl }
+  }
+
+  // 4. 建立單一高效的 MapLibre 合併圖層
+  if (mapStyle) {
+    const glLayer = L.maplibreGL({
+      style: mapStyle,
+      maxZoom: 20,
+      transformRequest: fontTransform
+    })
+    glLayer.addTo(map)
+  }
+
+  // 5. 載入並管理 GeoJSON 點位圖層 (minzoom >= 18)
   try {
     const baseUrl = import.meta.env.BASE_URL || '/'
     
@@ -137,8 +189,6 @@ onMounted(async () => {
 
     const updateGeoJsonVisibility = () => {
       const zoom = map.getZoom()
-      currentZoom.value = Number(zoom.toFixed(1))
-
       if (zoom >= 18) {
         if (!map.hasLayer(tlampLayer)) {
           tlampLayer.addTo(map)
@@ -151,8 +201,6 @@ onMounted(async () => {
     }
 
     updateGeoJsonVisibility()
-
-    // 隨時監聽地圖縮放事件
     map.on('zoom', updateGeoJsonVisibility)
     map.on('zoomend', updateGeoJsonVisibility)
 
