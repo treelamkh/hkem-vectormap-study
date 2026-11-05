@@ -30,6 +30,9 @@ onMounted(async () => {
     fadeAnimation: false
   })
 
+  // 初始化時立即同步一次 Zoom Level
+  currentZoom.value = Number(map.getZoom().toFixed(1))
+
   let mapStyle = null
 
   try {
@@ -63,7 +66,6 @@ onMounted(async () => {
         const sourceLayer = (layer['source-layer'] || '').toUpperCase()
         const layerId = (layer.id || '').toLowerCase()
 
-        // 排除容易引起 Type 4 錯誤的 symbol/標籤圖層
         if (layerId.includes('label') || layerId.includes('text') || layer.type === 'symbol') {
           return
         }
@@ -104,19 +106,20 @@ onMounted(async () => {
 
   glLayer.addTo(map)
 
-  // 6. 載入並管理 GeoJSON 圖層 (限定 minzoom >= 18 才顯示)
+  // 6. 載入並管理 GeoJSON 圖層 (結合 Vite base 路徑，避免 GitHub Pages 404)
   try {
+    const baseUrl = import.meta.env.BASE_URL || '/'
+    
     const customIcon = L.icon({
-      iconUrl: '/tlamp20.svg',
-      iconSize: [16, 16],      // 將寬高縮小為 16x16 像素
-      iconAnchor: [8, 8],      // 錨點設為尺寸的一半 (中心點)
-      popupAnchor: [0, -8]     // 彈窗位置相應調整
+      iconUrl: `${baseUrl}tlamp20.svg`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+      popupAnchor: [0, -8]
     })
 
-    const geoJsonRes = await fetch('/3DPN_midpt_WGS84.geojson')
+    const geoJsonRes = await fetch(`${baseUrl}3DPN_midpt_WGS84.geojson`)
     const geoJsonData = await geoJsonRes.json()
 
-    // 建立 GeoJSON 圖層實體
     const tlampLayer = L.geoJSON(geoJsonData, {
       pointToLayer: (feature, latlng) => {
         return L.marker(latlng, { icon: customIcon })
@@ -132,7 +135,6 @@ onMounted(async () => {
       }
     })
 
-    // 定期檢查並更新圖層顯示狀態的函式
     const updateGeoJsonVisibility = () => {
       const zoom = map.getZoom()
       currentZoom.value = Number(zoom.toFixed(1))
@@ -148,10 +150,10 @@ onMounted(async () => {
       }
     }
 
-    // 初始化時執行一次
     updateGeoJsonVisibility()
 
-    // 監聽縮放結束事件
+    // 隨時監聽地圖縮放事件
+    map.on('zoom', updateGeoJsonVisibility)
     map.on('zoomend', updateGeoJsonVisibility)
 
   } catch (geoJsonErr) {
