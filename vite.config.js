@@ -44,6 +44,8 @@ export default defineConfig({
       }
     }
   ],
+  // 設定 base 為 /hkem-vectormap-study/，以便在 GitHub Pages 上正確部署
+  base: '/hkem-vectormap-study/',
   server: {
     port: 5173
   }

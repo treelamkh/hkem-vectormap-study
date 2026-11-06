@@ -6,12 +6,9 @@
     <div class="control-panel">
       <div class="panel-header">
         <span>🗂️ 圖層三大分類批次控制面板</span>
-        <button class="toggle-btn" @click="isMinimized = !isMinimized">
-          {{ isMinimized ? '+' : '-' }}
-        </button>
       </div>
 
-      <div class="panel-body" v-show="!isMinimized">
+      <div class="panel-body">
         <!-- 當前 Zoom -->
         <div class="control-item">
           <label>當前 Zoom:</label>
@@ -61,7 +58,7 @@
         </div>
 
         <div class="hint-text">
-          💡 點擊右上角 [-] 可最小化面板，切換 Y 模式可載入本地 PBF。
+          💡 切換 Y 模式可順暢載入本地 PBF，支援 Level 17+ 超量放大（Overzoom）渲染。
         </div>
       </div>
     </div>
@@ -73,7 +70,6 @@ import { onMounted, reactive, ref } from 'vue'
 
 const currentZoom = ref(11)
 const mapContainer = ref(null)
-const isMinimized = ref(false)
 const debugMode = ref('N')
 
 let mapInstance = null
@@ -91,9 +87,13 @@ const categories = reactive({
 
 // 執行樣式更新的核心邏輯
 const updateCategoryStyle = (categoryKey) => {
-  if (!realMlMap) return
+  if (!realMlMap) {
+    console.warn('⚠️ [Debug] MapLibre 實例尚未就緒')
+    return
+  }
 
   const cat = categories[categoryKey]
+  let successCount = 0
   cat.ids.forEach(id => {
     try {
       const layer = realMlMap.getLayer(id)
@@ -101,37 +101,20 @@ const updateCategoryStyle = (categoryKey) => {
         if (layer.type === 'line') {
           realMlMap.setPaintProperty(id, 'line-color', cat.color)
           realMlMap.setPaintProperty(id, 'line-width', cat.width)
+          successCount++
         } else if (layer.type === 'fill') {
           realMlMap.setPaintProperty(id, 'fill-color', cat.color)
+          successCount++
         } else if (layer.type === 'circle') {
           realMlMap.setPaintProperty(id, 'circle-color', cat.color)
           realMlMap.setPaintProperty(id, 'circle-radius', cat.width)
+          successCount++
         }
       }
     } catch (err) {
       // 略過不支援的屬性
     }
   })
-}
-
-// 自動將 esri 來源的圖層與 source-layer 資訊印在 Console 中
-const inspectMapLayers = (map) => {
-  try {
-    const style = map.getStyle()
-    if (style && style.layers) {
-      console.group('🔍 [Debug] esri 來源的圖層與 Source-Layer 對應清單：')
-      style.layers
-        .filter(l => l.source === 'esri')
-        .forEach(l => {
-          console.log(`Layer ID: ${l.id} | Source-Layer: ${l['source-layer'] || 'N/A'}`)
-        })
-      console.groupEnd()
-    } else {
-      map.once('style.load', () => inspectMapLayers(map))
-    }
-  } catch (err) {
-    console.error('❌ 無法獲取圖層清單:', err)
-  }
 }
 
 // 實例捕獲共用函式
@@ -160,9 +143,6 @@ const captureMapInstance = (layer) => {
       updateCategoryStyle('normal')
       updateCategoryStyle('layer5K')
       updateCategoryStyle('layer1K')
-
-      // 檢查圖層與 source-layer
-      inspectMapLayers(realMlMap)
     } else {
       setTimeout(checkInstance, 100)
     }
@@ -238,18 +218,21 @@ onMounted(async () => {
   let mapStyleNormal = null
   let mapStyleDebug = null
 
-  // 1. 載入並處理線上 Basemap Style (Normal 與 Debug)
+  // 1. 載入並處理線上 Basemap Style (Normal 與 Debug 雙版本)
   try {
     const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
     const res = await fetch(styleUrl)
     const textData = await res.text()
     const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
+    
     mapStyleNormal = JSON.parse(fixedText)
     mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
 
+    // 處理 Normal 版本 (線上)
     if (mapStyleNormal.sources) {
       Object.keys(mapStyleNormal.sources).forEach(key => {
         if (mapStyleNormal.sources[key].type === 'vector') {
+          mapStyleNormal.sources[key].maxzoom = 15
           mapStyleNormal.sources[key].tiles = [
             'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/tile/{z}/{y}/{x}.pbf'
           ]
@@ -257,13 +240,14 @@ onMounted(async () => {
       })
     }
 
+    // 處理 Debug 版本 (本地 PBF + Overzoom 支援 + 移除 bounds)
     if (mapStyleDebug.sources) {
       Object.keys(mapStyleDebug.sources).forEach(key => {
         if (mapStyleDebug.sources[key].type === 'vector') {
+          mapStyleDebug.sources[key].maxzoom = 15
           mapStyleDebug.sources[key].tiles = [
             `${window.location.origin}/tiles/{z}/{x}/{y}.pbf`
           ]
-          // ★ 關鍵：拔掉或放大 bounds 限制，避免 MapLibre 拒絕渲染本地圖磚
           delete mapStyleDebug.sources[key].bounds
         }
       })
@@ -306,7 +290,7 @@ onMounted(async () => {
     console.error('❌ [Debug] Basemap 載入失敗:', err)
   }
 
-  // 2. 獨立載入並合併 Label Style 給 Normal 與 Debug 雙版本
+  // 2. 獨立載入並合併 Label Style 給雙版本
   try {
     const styLabelUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/styles/root.json'
     const [resLabel1, resLabel2] = await Promise.all([fetch(styLabelUrl), fetch(styLabelUrl)])
@@ -325,6 +309,7 @@ onMounted(async () => {
       const sKey = Object.keys(labelStyle1.sources)[0] || 'esri'
       const sObj = labelStyle1.sources[sKey]
       if (sObj) {
+        sObj.maxzoom = 15
         sObj.tiles = ['https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf']
         mapStyleNormal.sources['hk_label_norm'] = sObj
         if (labelStyle1.layers) {
@@ -341,6 +326,7 @@ onMounted(async () => {
       const sKey2 = Object.keys(labelStyle2.sources)[0] || 'esri'
       const sObj2 = labelStyle2.sources[sKey2]
       if (sObj2) {
+        sObj2.maxzoom = 15
         sObj2.tiles = ['https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf']
         mapStyleDebug.sources['hk_label_dbg'] = sObj2
         if (labelStyle2.layers) {
@@ -363,7 +349,7 @@ onMounted(async () => {
     glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform })
   }
 
-  // 預設載入線上版
+  // 預設載入線上版 (N)
   if (glLayerNormal) {
     glLayerNormal.addTo(map)
     currentActiveLayer = glLayerNormal
@@ -400,26 +386,6 @@ onMounted(async () => {
   padding: 10px 14px;
   font-weight: bold;
   font-size: 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.toggle-btn {
-  background: #34495e;
-  color: white;
-  border: 1px solid #4e6d8d;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  font-weight: bold;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s;
-}
-.toggle-btn:hover {
-  background: #4e6d8d;
 }
 .panel-body {
   padding: 14px;
