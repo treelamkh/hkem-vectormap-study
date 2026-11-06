@@ -6,9 +6,13 @@
     <div class="control-panel">
       <div class="panel-header">
         <span>🗂️ 圖層三大分類批次控制面板</span>
+        <!-- 移至右上角的最小化按鈕 -->
+        <button class="toggle-btn" @click.stop="isMinimized = !isMinimized">
+          {{ isMinimized ? '+' : '-' }}
+        </button>
       </div>
 
-      <div class="panel-body">
+      <div class="panel-body" v-show="!isMinimized">
         <!-- 當前 Zoom -->
         <div class="control-item">
           <label>當前 Zoom:</label>
@@ -70,6 +74,7 @@ import { onMounted, reactive, ref } from 'vue'
 
 const currentZoom = ref(11)
 const mapContainer = ref(null)
+const isMinimized = ref(false)
 const debugMode = ref('N')
 
 let mapInstance = null
@@ -228,7 +233,6 @@ onMounted(async () => {
     mapStyleNormal = JSON.parse(fixedText)
     mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
 
-    // 處理 Normal 版本 (線上)
     if (mapStyleNormal.sources) {
       Object.keys(mapStyleNormal.sources).forEach(key => {
         if (mapStyleNormal.sources[key].type === 'vector') {
@@ -240,7 +244,6 @@ onMounted(async () => {
       })
     }
 
-    // 處理 Debug 版本 (本地 PBF + Overzoom 支援 + 移除 bounds)
     if (mapStyleDebug.sources) {
       Object.keys(mapStyleDebug.sources).forEach(key => {
         if (mapStyleDebug.sources[key].type === 'vector') {
@@ -253,7 +256,6 @@ onMounted(async () => {
       })
     }
 
-    // 核心分類邏輯
     if (mapStyleNormal.layers) {
       const normalIds = []
       const layer5KIds = []
@@ -386,6 +388,27 @@ onMounted(async () => {
   padding: 10px 14px;
   font-weight: bold;
   font-size: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.toggle-btn {
+  background: #34495e;
+  color: white;
+  border: 1px solid #4e6d8d;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  pointer-events: auto; /* 確保按鈕可點擊 */
+}
+.toggle-btn:hover {
+  background: #4e6d8d;
 }
 .panel-body {
   padding: 14px;
