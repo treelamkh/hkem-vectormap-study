@@ -1,10 +1,50 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import fs from 'fs'
+import path from 'path'
 
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue()],
-  // 請把 '你的專案名稱' 換成你 GitHub repository 的名稱（前後都要有斜線）
-  // 例如你的 repo 叫 hk-map-study，這裡就要填 '/hk-map-study/'
-  base: '/hkem-vectormap-study/', 
+  plugins: [
+    vue(),
+    {
+      name: 'tile-xyz-to-yxy-fix',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          // 只要請求是以 /tiles/ 開頭就進行攔截
+          if (req.url && req.url.startsWith('/tiles/')) {
+            const match = req.url.match(/^\/tiles\/(\d+)\/(\d+)\/(\d+)\.pbf/)
+            if (match) {
+              const [, z, a, b] = match
+              
+              // 這裡我們直接彈性對應：無論前端傳來的是 x/y 還是 y/x，
+              // 我們直接檢查硬碟中實際存在的檔案組合 (z/a/b 或 z/b/a)
+              const path1 = path.resolve(__dirname, `public/tiles/${z}/${a}/${b}.pbf`)
+              const path2 = path.resolve(__dirname, `public/tiles/${z}/${b}/${a}.pbf`)
+              
+              let realPath = null
+              if (fs.existsSync(path1)) {
+                realPath = path1
+              } else if (fs.existsSync(path2)) {
+                realPath = path2
+              }
+
+              if (realPath) {
+                res.setHeader('Content-Type', 'application/x-protobuf')
+                return fs.createReadStream(realPath).pipe(res)
+              } else {
+                console.warn(`⚠️ [Tile Not Found] 找不到圖磚檔案: ${path1} 或 ${path2}`)
+                res.statusCode = 404
+                res.end('Tile not found')
+                return
+              }
+            }
+          }
+          next()
+        })
+      }
+    }
+  ],
+  server: {
+    port: 5173
+  }
 })

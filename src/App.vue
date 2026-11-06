@@ -2,7 +2,7 @@
   <div class="map-container">
     <div ref="mapContainer" id="map"></div>
 
-    <!-- 依 1K / 5K / Normal 分類的批次控制器（支援最小化） -->
+    <!-- 依 1K / 5K / Normal 分類的批次控制器 -->
     <div class="control-panel">
       <div class="panel-header">
         <span>🗂️ 圖層三大分類批次控制面板</span>
@@ -16,6 +16,15 @@
         <div class="control-item">
           <label>當前 Zoom:</label>
           <span class="badge">{{ currentZoom }}</span>
+        </div>
+
+        <!-- Debug Mode 切換開關 -->
+        <div class="control-item debug-box">
+          <label>Debug Mode (本地 PBF):</label>
+          <select v-model="debugMode" @change="switchDebugMode" class="select-input">
+            <option value="N">N (線上 API)</option>
+            <option value="Y">Y (本地 \public\tiles\)</option>
+          </select>
         </div>
 
         <!-- 1. Normal 圖層控制 -->
@@ -52,7 +61,7 @@
         </div>
 
         <div class="hint-text">
-          💡 點擊右上角 [-] 可最小化面板，方便檢視地圖。
+          💡 點擊右上角 [-] 可最小化面板，切換 Y 模式可載入本地 PBF。
         </div>
       </div>
     </div>
@@ -65,9 +74,13 @@ import { onMounted, reactive, ref } from 'vue'
 const currentZoom = ref(11)
 const mapContainer = ref(null)
 const isMinimized = ref(false)
+const debugMode = ref('N')
 
 let mapInstance = null
 let realMlMap = null
+let glLayerNormal = null
+let glLayerDebug = null
+let currentActiveLayer = null
 
 // 定義三大類別及其對應的圖層 ID 清單與當前設定的樣式數值
 const categories = reactive({
@@ -78,15 +91,9 @@ const categories = reactive({
 
 // 執行樣式更新的核心邏輯
 const updateCategoryStyle = (categoryKey) => {
-  if (!realMlMap) {
-    console.warn('⚠️ [Debug] MapLibre 實例尚未就緒')
-    return
-  }
+  if (!realMlMap) return
 
   const cat = categories[categoryKey]
-  console.log(`🔄 [Debug] 正在更新 [${categoryKey}] 類別，目標顏色: ${cat.color}，寬度: ${cat.width}px，共 ${cat.ids.length} 個圖層`)
-
-  let successCount = 0
   cat.ids.forEach(id => {
     try {
       const layer = realMlMap.getLayer(id)
@@ -94,21 +101,98 @@ const updateCategoryStyle = (categoryKey) => {
         if (layer.type === 'line') {
           realMlMap.setPaintProperty(id, 'line-color', cat.color)
           realMlMap.setPaintProperty(id, 'line-width', cat.width)
-          successCount++
         } else if (layer.type === 'fill') {
           realMlMap.setPaintProperty(id, 'fill-color', cat.color)
-          successCount++
         } else if (layer.type === 'circle') {
           realMlMap.setPaintProperty(id, 'circle-color', cat.color)
           realMlMap.setPaintProperty(id, 'circle-radius', cat.width)
-          successCount++
         }
       }
     } catch (err) {
       // 略過不支援的屬性
     }
   })
-  console.log(`🎉 [Debug] [${categoryKey}] 更新完成，成功修改 ${successCount}/${cat.ids.length} 個圖層`)
+}
+
+// 自動將 esri 來源的圖層與 source-layer 資訊印在 Console 中
+const inspectMapLayers = (map) => {
+  try {
+    const style = map.getStyle()
+    if (style && style.layers) {
+      console.group('🔍 [Debug] esri 來源的圖層與 Source-Layer 對應清單：')
+      style.layers
+        .filter(l => l.source === 'esri')
+        .forEach(l => {
+          console.log(`Layer ID: ${l.id} | Source-Layer: ${l['source-layer'] || 'N/A'}`)
+        })
+      console.groupEnd()
+    } else {
+      map.once('style.load', () => inspectMapLayers(map))
+    }
+  } catch (err) {
+    console.error('❌ 無法獲取圖層清單:', err)
+  }
+}
+
+// 實例捕獲共用函式
+const captureMapInstance = (layer) => {
+  const findMaplibreInstance = () => {
+    if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
+      return layer.getMaplibreMap()
+    }
+    if (layer._glMap) return layer._glMap
+    if (layer._maplibreMap) return layer._maplibreMap
+    for (const key of Object.keys(layer)) {
+      if (layer[key] && typeof layer[key].setPaintProperty === 'function') {
+        return layer[key]
+      }
+    }
+    return null
+  }
+
+  const checkInstance = () => {
+    const instance = findMaplibreInstance()
+    if (instance) {
+      realMlMap = instance
+      window.mlMap = realMlMap
+      console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
+      
+      updateCategoryStyle('normal')
+      updateCategoryStyle('layer5K')
+      updateCategoryStyle('layer1K')
+
+      // 檢查圖層與 source-layer
+      inspectMapLayers(realMlMap)
+    } else {
+      setTimeout(checkInstance, 100)
+    }
+  }
+  checkInstance()
+}
+
+// 切換 Debug Mode
+const switchDebugMode = () => {
+  if (!mapInstance) return
+
+  if (currentActiveLayer && mapInstance.hasLayer(currentActiveLayer)) {
+    mapInstance.removeLayer(currentActiveLayer)
+  }
+
+  if (debugMode.value === 'Y') {
+    console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 \public\tiles\ pbf)')
+    if (glLayerDebug) {
+      glLayerDebug.addTo(mapInstance)
+      currentActiveLayer = glLayerDebug
+      captureMapInstance(glLayerDebug)
+    }
+  } else {
+    console.log('🌐 [Debug] 切換至 Debug Mode: N (使用線上 API)')
+    if (glLayerNormal) {
+      glLayerNormal.addTo(mapInstance)
+      currentActiveLayer = glLayerNormal
+      captureMapInstance(glLayerNormal)
+    }
+  }
 }
 
 onMounted(async () => {
@@ -151,34 +235,47 @@ onMounted(async () => {
     return { url: reqUrl }
   }
 
-  let mapStyle = null
+  let mapStyleNormal = null
+  let mapStyleDebug = null
 
-  // 1. 載入並處理底圖 Style
+  // 1. 載入並處理線上 Basemap Style (Normal 與 Debug)
   try {
     const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
     const res = await fetch(styleUrl)
     const textData = await res.text()
     const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
-    mapStyle = JSON.parse(fixedText)
+    mapStyleNormal = JSON.parse(fixedText)
+    mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
 
-    if (mapStyle.sources) {
-      Object.keys(mapStyle.sources).forEach(key => {
-        if (mapStyle.sources[key].type === 'vector') {
-          mapStyle.sources[key].maxzoom = 15
-          mapStyle.sources[key].tiles = [
+    if (mapStyleNormal.sources) {
+      Object.keys(mapStyleNormal.sources).forEach(key => {
+        if (mapStyleNormal.sources[key].type === 'vector') {
+          mapStyleNormal.sources[key].tiles = [
             'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/tile/{z}/{y}/{x}.pbf'
           ]
         }
       })
     }
 
+    if (mapStyleDebug.sources) {
+      Object.keys(mapStyleDebug.sources).forEach(key => {
+        if (mapStyleDebug.sources[key].type === 'vector') {
+          mapStyleDebug.sources[key].tiles = [
+            `${window.location.origin}/tiles/{z}/{x}/{y}.pbf`
+          ]
+          // ★ 關鍵：拔掉或放大 bounds 限制，避免 MapLibre 拒絕渲染本地圖磚
+          delete mapStyleDebug.sources[key].bounds
+        }
+      })
+    }
+
     // 核心分類邏輯
-    if (mapStyle.layers) {
+    if (mapStyleNormal.layers) {
       const normalIds = []
       const layer5KIds = []
       const layer1KIds = []
 
-      mapStyle.layers.forEach(layer => {
+      mapStyleNormal.layers.forEach(layer => {
         const sourceLayer = (layer['source-layer'] || '').toUpperCase()
         const layerId = layer.id || ''
         const layerIdLower = layerId.toLowerCase()
@@ -200,10 +297,8 @@ onMounted(async () => {
 
       categories.normal.ids = normalIds
       categories.normal.length = normalIds.length
-
       categories.layer5K.ids = layer5KIds
       categories.layer5K.length = layer5KIds.length
-
       categories.layer1K.ids = layer1KIds
       categories.layer1K.length = layer1KIds.length
     }
@@ -211,76 +306,68 @@ onMounted(async () => {
     console.error('❌ [Debug] Basemap 載入失敗:', err)
   }
 
-  // 2. 載入 Label Style 並合併
+  // 2. 獨立載入並合併 Label Style 給 Normal 與 Debug 雙版本
   try {
     const styLabelUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/styles/root.json'
-    const resLabel = await fetch(styLabelUrl)
-    const textLabelData = await resLabel.text()
-    const fixedLabelText = textLabelData.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
-    const mapLabelStyle = JSON.parse(fixedLabelText)
+    const [resLabel1, resLabel2] = await Promise.all([fetch(styLabelUrl), fetch(styLabelUrl)])
+    
+    const text1 = await resLabel1.text()
+    const text2 = await resLabel2.text()
 
-    mapStyle.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
+    const fixed1 = text1.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
+    const fixed2 = text2.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
 
-    if (mapLabelStyle.sources) {
-      const labelSourceKey = Object.keys(mapLabelStyle.sources)[0] || 'esri'
-      const labelSourceObj = mapLabelStyle.sources[labelSourceKey]
-      
-      if (labelSourceObj) {
-        labelSourceObj.maxzoom = 15
-        labelSourceObj.tiles = [
-          'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf'
-        ]
-        mapStyle.sources['hk_label'] = labelSourceObj
+    const labelStyle1 = JSON.parse(fixed1)
+    const labelStyle2 = JSON.parse(fixed2)
 
-        if (mapLabelStyle.layers) {
-          mapLabelStyle.layers.forEach(layer => {
-            layer.source = 'hk_label'
-          })
+    if (mapStyleNormal) {
+      mapStyleNormal.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
+      const sKey = Object.keys(labelStyle1.sources)[0] || 'esri'
+      const sObj = labelStyle1.sources[sKey]
+      if (sObj) {
+        sObj.tiles = ['https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf']
+        mapStyleNormal.sources['hk_label_norm'] = sObj
+        if (labelStyle1.layers) {
+          labelStyle1.layers.forEach(l => { l.source = 'hk_label_norm' })
         }
+      }
+      if (labelStyle1.layers) {
+        mapStyleNormal.layers = [...mapStyleNormal.layers, ...labelStyle1.layers]
       }
     }
 
-    if (mapLabelStyle.layers && mapStyle.layers) {
-      mapStyle.layers = [...mapStyle.layers, ...mapLabelStyle.layers]
+    if (mapStyleDebug) {
+      mapStyleDebug.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
+      const sKey2 = Object.keys(labelStyle2.sources)[0] || 'esri'
+      const sObj2 = labelStyle2.sources[sKey2]
+      if (sObj2) {
+        sObj2.tiles = ['https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf']
+        mapStyleDebug.sources['hk_label_dbg'] = sObj2
+        if (labelStyle2.layers) {
+          labelStyle2.layers.forEach(l => { l.source = 'hk_label_dbg' })
+        }
+      }
+      if (labelStyle2.layers) {
+        mapStyleDebug.layers = [...mapStyleDebug.layers, ...labelStyle2.layers]
+      }
     }
   } catch (err) {
     console.error('❌ [Debug] Label Style 載入失敗:', err)
   }
 
-  // 3. 建立 MapLibre 圖層並捕獲實例
-  if (mapStyle) {
-    const glLayer = L.maplibreGL({
-      style: mapStyle,
-      maxZoom: 20,
-      transformRequest: fontTransform
-    })
-    glLayer.addTo(map)
+  // 3. 建立圖層實例
+  if (mapStyleNormal) {
+    glLayerNormal = L.maplibreGL({ style: mapStyleNormal, maxZoom: 20, transformRequest: fontTransform })
+  }
+  if (mapStyleDebug) {
+    glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform })
+  }
 
-    const findMaplibreInstance = () => {
-      if (typeof glLayer.getMaplibreMap === 'function' && glLayer.getMaplibreMap()) {
-        return glLayer.getMaplibreMap()
-      }
-      if (glLayer._glMap) return glLayer._glMap
-      if (glLayer._maplibreMap) return glLayer._maplibreMap
-      for (const key of Object.keys(glLayer)) {
-        if (glLayer[key] && typeof glLayer[key].setPaintProperty === 'function') {
-          return glLayer[key]
-        }
-      }
-      return null
-    }
-
-    const checkInstance = () => {
-      const instance = findMaplibreInstance()
-      if (instance) {
-        realMlMap = instance
-        window.mlMap = realMlMap
-        console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！', realMlMap)
-      } else {
-        setTimeout(checkInstance, 100)
-      }
-    }
-    checkInstance()
+  // 預設載入線上版
+  if (glLayerNormal) {
+    glLayerNormal.addTo(map)
+    currentActiveLayer = glLayerNormal
+    captureMapInstance(glLayerNormal)
   }
 })
 </script>
@@ -347,6 +434,19 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.debug-box {
+  background: #e8f4f8;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid #bbe1fa;
+}
+.select-input {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  font-weight: bold;
+  background: white;
 }
 .category-box {
   background: #f8f9fa;
