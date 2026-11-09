@@ -257,8 +257,10 @@ onMounted(async () => {
       Object.keys(mapStyleDebug.sources).forEach(key => {
         if (mapStyleDebug.sources[key].type === 'vector') {
           mapStyleDebug.sources[key].maxzoom = 15
+          // 取得當前的 router base 或自動判斷
+          const basePath = import.meta.env.BASE_URL || '/'
           mapStyleDebug.sources[key].tiles = [
-            `${window.location.origin}/tiles/{z}/{x}/{y}.pbf`
+            `${window.location.origin}${basePath}tiles/{z}/{x}/{y}.pbf`
           ]
           delete mapStyleDebug.sources[key].bounds
         }
