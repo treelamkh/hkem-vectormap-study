@@ -2,32 +2,50 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import fs from 'fs'
 import path from 'path'
+import zlib from 'zlib'
 
 export default defineConfig({
   plugins: [
     vue(),
     {
-      name: 'local-tiles-middleware',
+      name: 'handle-gzipped-pbf-priority',
       configureServer(server) {
-        server.middlewares.use('/tiles', (req, res, next) => {
-          // 修改前 (指向 Python 腳本資料夾)
-          // const filePath = path.join('C:/Tree/python_scripts/hkem_basemap_pbf/dl_landsd_pbf/tiles', req.url)
+        const pbfMiddleware = (req, res, next) => {
+          if (req.url && req.url.includes('.pbf')) {
+            const cleanUrl = req.url.replace(/^\/hkem-vectormap-study/, '')
+            const filePath = path.join(process.cwd(), 'public', cleanUrl)
 
-          // 修改後 (指向你專案入面嘅 public/tiles)
-          const filePath = path.join(process.cwd(), 'public/tiles', req.url)
-          
-          if (fs.existsSync(filePath)) {
-            // ★ 關鍵：強制指定二進位圖磚的 Content-Type，解決 parse 失敗問題
-            res.setHeader('Content-Type', 'application/x-protobuf')
-            res.setHeader('Access-Control-Allow-Origin', '*')
-            fs.createReadStream(filePath).pipe(res)
-          } else {
-            res.statusCode = 404
-            res.end('Tile not found on disk')
+            if (fs.existsSync(filePath)) {
+              try {
+                const fileBuffer = fs.readFileSync(filePath)
+                let outputBuffer = fileBuffer
+
+                // 自動偵測並解壓 Gzip (Magic Number: 0x1f 8b)
+                if (fileBuffer.length > 2 && fileBuffer[0] === 0x1f && fileBuffer[1] === 0x8b) {
+                  outputBuffer = zlib.gunzipSync(fileBuffer)
+                }
+
+                res.setHeader('Content-Type', 'application/vnd.mapbox-vector-tile')
+                res.setHeader('Access-Control-Allow-Origin', '*')
+                res.removeHeader('Content-Encoding')
+                res.end(outputBuffer)
+                return
+              } catch (err) {
+                console.error('❌ PBF 處理失敗:', err)
+              }
+            }
           }
-        })
+          next()
+        }
+
+        // 透過修改內部 stack 陣列，將 middleware 放到最前面優先執行
+        if (server.middlewares.stack) {
+          server.middlewares.stack.unshift({ route: '', handle: pbfMiddleware })
+        } else {
+          server.middlewares.use(pbfMiddleware)
+        }
       }
     }
   ],
-  base: '/hkem-vectormap-study/',
+  base: '/hkem-vectormap-study/'
 })

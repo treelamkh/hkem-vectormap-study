@@ -60,6 +60,19 @@
             <input type="range" min="1" max="20" step="0.5" v-model.number="categories.layer1K.width" @input="updateCategoryStyle('layer1K')" />
           </div>
         </div>
+        
+        <!-- 4. OSP 專屬圖層控制 -->
+        <div class="category-box osp-box">
+          <div class="category-title">OSP_MARK_LINE 控制</div>
+          <div class="control-row">
+            <label>顯示:</label>
+            <input type="checkbox" v-model="ospConfig.visible" @change="updateOspVisibility" />
+            <label>顏色:</label>
+            <input type="color" v-model="ospConfig.color" @change="updateOspStyle" />
+            <label>粗幼: {{ ospConfig.width }}px</label>
+            <input type="range" min="1" max="20" step="0.5" v-model.number="ospConfig.width" @input="updateOspStyle" />
+          </div>
+        </div>
 
         <div class="hint-text">
           💡 切換 Y 模式可順暢載入本地 PBF，支援 Level 17+ 超量放大（Overzoom）渲染。
@@ -144,6 +157,56 @@ const captureMapInstance = (layer) => {
       window.mlMap = realMlMap
       console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
       
+      // ★ 自動動態偵測 PBF 內的 Layer 並強制掛載 OSP_MARK_LINE
+      try {
+        const style = realMlMap.getStyle()
+        if (style && style.sources) {
+          const vKey = Object.keys(style.sources).find(k => style.sources[k].type === 'vector')
+          
+          if (vKey) {
+            // 嘗試常見的幾種大小寫變體，確保一定能中一個
+            const possibleNames = ['OSP_MARK_LINE', 'osp_mark_line', 'OSP-MARK-LINE', 'osp-mark-line']
+            
+            possibleNames.forEach((layerName, index) => {
+              const layerId = `osp-mark-line-layer-${index}`
+              if (!realMlMap.getLayer(layerId)) {
+                try {
+                  realMlMap.addLayer({
+                    id: layerId,
+                    type: 'line',
+                    source: vKey,
+                    'source-layer': layerName,
+                    minzoom: 0,
+                    maxzoom: 24,
+                    paint: {
+                      'line-color': index === 0 ? '#00ff00' : '#ffff00', // 第一個用綠，第二個用黃以資區別
+                      'line-width': 6
+                    }
+                  })
+                  console.log(`✨ 成功嘗試掛載 source-layer: [${layerName}] (ID: ${layerId})`)
+                } catch (e) {
+                  // 略過不匹配的名稱
+                }
+              }
+            })
+
+            // 強制將它們移到最頂層
+            setTimeout(() => {
+              possibleNames.forEach((_, index) => {
+                const layerId = `osp-mark-line-layer-${index}`
+                if (realMlMap.getLayer(layerId)) {
+                  realMlMap.moveLayer(layerId)
+                  const feats = realMlMap.queryRenderedFeatures({ layers: [layerId] })
+                  console.log(`🔍 檢查圖層 [${layerId}] 當前畫面上的特徵數: ${feats.length}`)
+                }
+              })
+            }, 500)
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ 掛載 OSP_MARK_LINE 失敗:', e)
+      }
+
       // 確保實例就緒後立刻更新當前類別樣式
       updateCategoryStyle('normal')
       updateCategoryStyle('layer5K')
@@ -171,6 +234,39 @@ const switchDebugMode = () => {
       glLayerDebug.addTo(mapInstance)
       currentActiveLayer = glLayerDebug
       captureMapInstance(glLayerDebug)
+
+      // ★ 強制直接在切換時掛載 OSP_MARK_LINE
+      setTimeout(() => {
+        if (realMlMap) {
+          try {
+            const style = realMlMap.getStyle()
+            const vKey = Object.keys(style.sources).find(k => style.sources[k].type === 'vector')
+            if (vKey) {
+              const targetLayerId = 'osp-mark-line-forced'
+              if (!realMlMap.getLayer(targetLayerId)) {
+                realMlMap.addLayer({
+                  id: targetLayerId,
+                  type: 'line',
+                  source: vKey,
+                  'source-layer': 'OSP_MARK_LINE',
+                  minzoom: 0,
+                  maxzoom: 24,
+                  paint: {
+                    'line-color': ospConfig.color, // 使用響應式變數（淺灰色）
+                    'line-width': ospConfig.width
+                  }
+                })
+                console.log('✨ [強制掛載] OSP_MARK_LINE 成功加入地圖！')
+              }
+              realMlMap.moveLayer(targetLayerId)
+              const feats = realMlMap.queryRenderedFeatures({ layers: [targetLayerId] })
+              console.log(`🔍 [強制檢查] 畫面上的 OSP_MARK_LINE 數量: ${feats.length}`)
+            }
+          } catch (e) {
+            console.error('❌ 強制掛載失敗:', e)
+          }
+        }
+      }, 500)
     }
   } else {
     console.log('🌐 [Debug] 切換至 Debug Mode: N (使用線上 API)')
@@ -181,12 +277,38 @@ const switchDebugMode = () => {
     }
   }
 
-  // 3. 強制觸發一次 MapLibre 的 resize 與重繪
   setTimeout(() => {
     if (realMlMap) {
       realMlMap.resize()
     }
   }, 200)
+}
+
+// OSP 圖層的控制狀態（預設顏色設為淺灰色 #d3d3d3 或 #95a5a6）
+const ospConfig = reactive({
+  visible: true,
+  color: '#d3d3d3', // 淺灰色
+  width: 2
+})
+
+// 更新 OSP 顯示/隱藏
+const updateOspVisibility = () => {
+  if (!realMlMap) return
+  const targetLayerId = 'osp-mark-line-forced'
+  if (realMlMap.getLayer(targetLayerId)) {
+    const visibility = ospConfig.visible ? 'visible' : 'none'
+    realMlMap.setLayoutProperty(targetLayerId, 'visibility', visibility)
+  }
+}
+
+// 更新 OSP 顏色與粗幼
+const updateOspStyle = () => {
+  if (!realMlMap) return
+  const targetLayerId = 'osp-mark-line-forced'
+  if (realMlMap.getLayer(targetLayerId)) {
+    realMlMap.setPaintProperty(targetLayerId, 'line-color', ospConfig.color)
+    realMlMap.setPaintProperty(targetLayerId, 'line-width', ospConfig.width)
+  }
 }
 
 onMounted(async () => {
@@ -483,5 +605,9 @@ onMounted(async () => {
   padding: 6px;
   border-radius: 4px;
   border: 1px solid #ffeeba;
+}
+.osp-box {
+  background: #f1f2f6;
+  border: 1px solid #dcdde1;
 }
 </style>
