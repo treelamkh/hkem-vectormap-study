@@ -10,7 +10,11 @@ export default defineConfig({
       name: 'local-tiles-middleware',
       configureServer(server) {
         server.middlewares.use('/tiles', (req, res, next) => {
-          const filePath = path.join('C:/Tree/python_scripts/hkem_basemap_pbf/dl_landsd_pbf/tiles', req.url)
+          // 修改前 (指向 Python 腳本資料夾)
+          // const filePath = path.join('C:/Tree/python_scripts/hkem_basemap_pbf/dl_landsd_pbf/tiles', req.url)
+
+          // 修改後 (指向你專案入面嘅 public/tiles)
+          const filePath = path.join(process.cwd(), 'public/tiles', req.url)
           
           if (fs.existsSync(filePath)) {
             // ★ 關鍵：強制指定二進位圖磚的 Content-Type，解決 parse 失敗問題

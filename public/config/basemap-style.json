@@ -15063,16 +15063,15 @@
       }
     },
 	{
-	  "id": "custom-osp-mark-line-layer",
-	  "type": "line",
-	  "source": "esri",
-	  "source-layer": "OSP_MARK_LINE",
-	  "minzoom": 9,
-	  "maxzoom": 16,
-	  "paint": {
-		"line-color": "#ff0000",
-    "line-width": 6
-	  }
-	}
+    "id": "custom-crossing-layer",
+    "type": "circle",
+    "source": "esri",
+    "source-layer": "signal_crossing",
+    "minzoom": 9,
+    "paint": {
+      "circle-color": "#ff0000",
+      "circle-radius": 6
+    }
+  }
   ]
 }

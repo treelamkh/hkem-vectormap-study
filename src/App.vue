@@ -122,7 +122,6 @@ const updateCategoryStyle = (categoryKey) => {
   })
 }
 
-// 實例捕獲共用函式
 const captureMapInstance = (layer) => {
   const findMaplibreInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
@@ -144,14 +143,8 @@ const captureMapInstance = (layer) => {
       realMlMap = instance
       window.mlMap = realMlMap
       console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
-
-      // ★ 加上這一行：地圖載入完成後自動印出畫面上的所有 source-layer 名稱
-      setTimeout(() => {
-        const layers = realMlMap.queryRenderedFeatures()
-        const sourceLayers = [...new Set(layers.map(f => f.layer?.['source-layer'] || f.sourceLayer))]
-        console.log('📌 【當前畫面的 source-layers 清單】：', sourceLayers)
-      }, 1000)
-
+      
+      // 確保實例就緒後立刻更新當前類別樣式
       updateCategoryStyle('normal')
       updateCategoryStyle('layer5K')
       updateCategoryStyle('layer1K')
@@ -162,26 +155,16 @@ const captureMapInstance = (layer) => {
   checkInstance()
 }
 
-const debugSourceFeatures = () => {
-  if (realMlMap && realMlMap.getSource('esri')) {
-    // 取得該 source 的內部所有原始資料
-    const features = realMlMap.querySourceFeatures('esri', {
-      sourceLayer: 'OSP_MARK_LINE'
-    });
-    console.log('🎯 [強制查詢 OSP] 結果：', features);
-  }
-};
-// 可以在地圖載入後 2 秒呼叫一次
-setTimeout(debugSourceFeatures, 2000);
-
 // 切換 Debug Mode
 const switchDebugMode = () => {
   if (!mapInstance) return
 
+  // 1. 移除當前圖層
   if (currentActiveLayer && mapInstance.hasLayer(currentActiveLayer)) {
     mapInstance.removeLayer(currentActiveLayer)
   }
 
+  // 2. 根據模式加入對應圖層
   if (debugMode.value === 'Y') {
     console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 \public\tiles\ pbf)')
     if (glLayerDebug) {
@@ -197,6 +180,13 @@ const switchDebugMode = () => {
       captureMapInstance(glLayerNormal)
     }
   }
+
+  // 3. 強制觸發一次 MapLibre 的 resize 與重繪
+  setTimeout(() => {
+    if (realMlMap) {
+      realMlMap.resize()
+    }
+  }, 200)
 }
 
 onMounted(async () => {
@@ -217,7 +207,6 @@ onMounted(async () => {
   mapInstance = map
 
   map.on('zoom', () => { currentZoom.value = Number(map.getZoom().toFixed(1)) })
-  map.on('move', debugSourceFeatures)
 
   // 字型轉譯攔截器
   const fontTransform = (url) => {
@@ -245,12 +234,8 @@ onMounted(async () => {
 
   // 1. 載入並處理線上 Basemap Style (Normal 與 Debug 雙版本)
   try {
-    //const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
-    //const res = await fetch(styleUrl)
-    //const textData = await res.text()
-    //const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
-
-    const res = await fetch(`${import.meta.env.BASE_URL}config/basemap-style.json`)
+    const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
+    const res = await fetch(styleUrl)
     const textData = await res.text()
     const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
     
@@ -290,38 +275,20 @@ onMounted(async () => {
         const layerId = layer.id || ''
         const layerIdLower = layerId.toLowerCase()
 
-        // 1. 排除文字標籤與符號
         if (layerIdLower.includes('label') || layerIdLower.includes('text') || layer.type === 'symbol') {
-            return
+          return
         }
 
-        // 🎯 2. Special Handle: OSP 獨立處理邏輯
-        if (sourceLayer.includes('OSP') || layerIdLower.includes('osp')) {
-            // 印出除錯資訊，確定它被處理了
-            console.log('[Debug OSP] 成功捕獲 OSP 圖層:', layerId)
-            
-            // 根據需求設定它的 minzoom（例如設為 10，確保它在低視角就能開始顯示）
-            // 如果你希望它在 Zoom 10 就能出線：
-            layer.minzoom = 10;
-            
-            // 將它放入 normalIds 或是你獨立的類別
-            normalIds.push(layerId)
-            return // 處理完 OSP 後直接跳過後續的 1K/5K 判斷
-        }
-
-        // 3. 原本的 1K / 5K 邏輯
         if (sourceLayer.includes('1K') || layerIdLower.includes('1k')) {
-            layer.minzoom = 18
-            layer1Kids.push(layerId)
-        } 
-        else if (sourceLayer.includes('5K') || layerIdLower.includes('5k')) {
-            layer.minzoom = 15
-            layer5Kids.push(layerId)
-        } 
-        else {
-            normalIds.push(layerId)
+          layer.minzoom = 18
+          layer1KIds.push(layerId)
+        } else if (sourceLayer.includes('5K') || layerIdLower.includes('5k')) {
+          layer.minzoom = 15
+          layer5KIds.push(layerId)
+        } else {
+          normalIds.push(layerId)
         }
-    })
+      })
 
       categories.normal.ids = normalIds
       categories.normal.length = normalIds.length
@@ -330,6 +297,7 @@ onMounted(async () => {
       categories.layer1K.ids = layer1KIds
       categories.layer1K.length = layer1KIds.length
     }
+
   } catch (err) {
     console.error('❌ [Debug] Basemap 載入失敗:', err)
   }
