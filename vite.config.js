@@ -7,44 +7,23 @@ export default defineConfig({
   plugins: [
     vue(),
     {
-      name: 'tile-xyz-to-yxy-fix',
+      name: 'local-tiles-middleware',
       configureServer(server) {
-        server.middlewares.use((req, res, next) => {
-          // 只要請求是以 /tiles/ 開頭就進行攔截
-          if (req.url && req.url.startsWith('/tiles/')) {
-            const match = req.url.match(/^\/tiles\/(\d+)\/(\d+)\/(\d+)\.pbf/)
-            if (match) {
-              const [, z, a, b] = match
-              
-              // 這裡我們直接彈性對應：無論前端傳來的是 x/y 還是 y/x，
-              // 我們直接檢查硬碟中實際存在的檔案組合 (z/a/b 或 z/b/a)
-              const path1 = path.resolve(__dirname, `public/tiles/${z}/${a}/${b}.pbf`)
-              const path2 = path.resolve(__dirname, `public/tiles/${z}/${b}/${a}.pbf`)
-              
-              let realPath = null
-              if (fs.existsSync(path1)) {
-                realPath = path1
-              } else if (fs.existsSync(path2)) {
-                realPath = path2
-              }
-
-              if (realPath) {
-                res.setHeader('Content-Type', 'application/x-protobuf')
-                return fs.createReadStream(realPath).pipe(res)
-              } else {
-                console.warn(`⚠️ [Tile Not Found] 找不到圖磚檔案: ${path1} 或 ${path2}`)
-                res.statusCode = 404
-                res.end('Tile not found')
-                return
-              }
-            }
+        server.middlewares.use('/tiles', (req, res, next) => {
+          const filePath = path.join('C:/Tree/python_scripts/hkem_basemap_pbf/dl_landsd_pbf/tiles', req.url)
+          
+          if (fs.existsSync(filePath)) {
+            // ★ 關鍵：強制指定二進位圖磚的 Content-Type，解決 parse 失敗問題
+            res.setHeader('Content-Type', 'application/x-protobuf')
+            res.setHeader('Access-Control-Allow-Origin', '*')
+            fs.createReadStream(filePath).pipe(res)
+          } else {
+            res.statusCode = 404
+            res.end('Tile not found on disk')
           }
-          next()
         })
       }
     }
   ],
-  server: {
-    port: 5173
-  }
+  base: '/hkem-vectormap-study/',
 })
