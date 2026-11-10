@@ -15062,16 +15062,17 @@
         "text-halo-width": 1.33333
       }
     },
-	{
-    "id": "custom-crossing-layer",
-    "type": "circle",
-    "source": "esri",
-    "source-layer": "signal_crossing",
-    "minzoom": 9,
-    "paint": {
-      "circle-color": "#ff0000",
-      "circle-radius": 6
+    {
+      "id": "osp-mark-line-layer",
+      "type": "line",
+      "source": "esri", 
+      "source-layer": "OSP_MARK_LINE",
+      "minzoom": 0,
+      "maxzoom": 24,
+      "paint": {
+        "line-color": "#d3d3d3",
+        "line-width": 3
+      }
     }
-  }
   ]
 }
