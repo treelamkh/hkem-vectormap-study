@@ -2,80 +2,66 @@
   <div class="map-container">
     <div ref="mapContainer" id="map"></div>
 
-    <!-- 依 1K / 5K / Normal 分類的批次控制器 -->
+    <!-- 控制面板 -->
     <div class="control-panel">
+      <!-- 頂部固定項目 -->
       <div class="panel-header">
-        <span>🗂️ 圖層三大分類批次控制面板</span>
-        <!-- 移至右上角的最小化按鈕 -->
-        <button class="toggle-btn" @click.stop="isMinimized = !isMinimized">
-          {{ isMinimized ? '+' : '-' }}
-        </button>
-      </div>
-
-      <div class="panel-body" v-show="!isMinimized">
-        <!-- 當前 Zoom -->
-        <div class="control-item">
+        <div class="info-row">
           <label>當前 Zoom:</label>
-          <span class="badge">{{ currentZoom }}</span>
+          <span class="zoom-badge">{{ currentZoom }}</span>
         </div>
-
-        <!-- Debug Mode 切換開關 -->
-        <div class="control-item debug-box">
-          <label>Debug Mode (本地 PBF):</label>
-          <select v-model="debugMode" @change="switchDebugMode" class="select-input">
+        <div class="info-row">
+          <label>Debug Mode:</label>
+          <select v-model="debugMode" @change="switchDebugMode">
             <option value="N">N (線上 API)</option>
-            <option value="Y">Y (本地 \public\tiles\)</option>
+            <option value="Y">Y (本地 tiles pbf)</option>
           </select>
         </div>
-
-        <!-- 1. Normal 圖層控制 -->
-        <div class="category-box">
-          <div class="category-title">Normal 圖層 (共 {{ categories.normal.length }} 個)</div>
-          <div class="control-row">
-            <label>顏色:</label>
-            <input type="color" v-model="categories.normal.color" @change="updateCategoryStyle('normal')" />
-            <label>粗幼: {{ categories.normal.width }}px</label>
-            <input type="range" min="1" max="20" step="0.5" v-model.number="categories.normal.width" @input="updateCategoryStyle('normal')" />
-          </div>
+        <!-- 快速搜尋框 -->
+        <div class="search-row">
+          <input 
+            type="text" 
+            v-model="searchKeyword" 
+            placeholder="🔍 快速搜尋 Layer Name..." 
+            class="search-input"
+          />
         </div>
+      </div>
 
-        <!-- 2. 5K 圖層控制 -->
-        <div class="category-box">
-          <div class="category-title">5K 圖層 (共 {{ categories.layer5K.length }} 個)</div>
-          <div class="control-row">
-            <label>顏色:</label>
-            <input type="color" v-model="categories.layer5K.color" @change="updateCategoryStyle('layer5K')" />
-            <label>粗幼: {{ categories.layer5K.width }}px</label>
-            <input type="range" min="1" max="20" step="0.5" v-model.number="categories.layer5K.width" @input="updateCategoryStyle('layer5K')" />
-          </div>
-        </div>
+      <hr />
 
-        <!-- 3. 1K 圖層控制 -->
-        <div class="category-box">
-          <div class="category-title">1K 圖層 (共 {{ categories.layer1K.length }} 個)</div>
-          <div class="control-row">
-            <label>顏色:</label>
-            <input type="color" v-model="categories.layer1K.color" @change="updateCategoryStyle('layer1K')" />
-            <label>粗幼: {{ categories.layer1K.width }}px</label>
-            <input type="range" min="1" max="20" step="0.5" v-model.number="categories.layer1K.width" @input="updateCategoryStyle('layer1K')" />
+      <!-- 動態按 Zoom Level 分類的圖層控制清單 -->
+      <div class="layer-groups-container">
+        <div v-for="(layers, zoomLevel) in filteredLayersByZoom" :key="zoomLevel" class="zoom-group-box">
+          <div class="zoom-group-header">
+            <span class="zoom-group-title">
+              Zoom Level: >= {{ zoomLevel }} (共 {{ layers.length }} 個圖層)
+            </span>
+            <button class="toggle-btn" @click="toggleGroupCollapse(zoomLevel)">
+              {{ collapsedGroups[zoomLevel] ? '展開 +' : '收起 -' }}
+            </button>
           </div>
-        </div>
-        
-        <!-- 4. OSP 專屬圖層控制 -->
-        <div class="category-box osp-box">
-          <div class="category-title">OSP_MARK_LINE 控制</div>
-          <div class="control-row">
-            <label>顯示:</label>
-            <input type="checkbox" v-model="ospConfig.visible" @change="updateOspVisibility" />
-            <label>顏色:</label>
-            <input type="color" v-model="ospConfig.color" @change="updateOspStyle" />
-            <label>粗幼: {{ ospConfig.width }}px</label>
-            <input type="range" min="1" max="20" step="0.5" v-model.number="ospConfig.width" @input="updateOspStyle" />
-          </div>
-        </div>
+          
+          <div class="zoom-content" v-show="!collapsedGroups[zoomLevel]">
+            <div v-for="layer in layers" :key="layer.id" class="layer-item-row">
+              <!-- 圖層名稱與類型 -->
+              <div class="layer-info">
+                <input type="checkbox" v-model="layer.visible" @change="toggleLayerVisibility(layer)" title="On/Off" />
+                <span class="layer-name" :title="layer.id">{{ layer.id }}</span>
+              </div>
 
-        <div class="hint-text">
-          💡 切換 Y 模式可順暢載入本地 PBF，支援 Level 17+ 超量放大（Overzoom）渲染。
+              <!-- 獨立功能: 調整顏色 -->
+              <div class="layer-controls" v-if="layer.hasColor">
+                <input type="color" v-model="layer.color" @change="updateLayerColor(layer)" title="調整顏色" />
+              </div>
+
+              <!-- 獨立功能: 調整大小 / 粗幼 -->
+              <div class="layer-controls width-control" v-if="layer.hasWidth">
+                <input type="range" min="1" max="20" step="0.5" v-model.number="layer.width" @input="updateLayerWidth(layer)" title="調整粗幼" />
+                <span class="width-val">{{ layer.width }}px</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -83,12 +69,15 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 
 const currentZoom = ref(11)
 const mapContainer = ref(null)
-const isMinimized = ref(false)
 const debugMode = ref('N')
+const searchKeyword = ref('')
+
+// 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
+const collapsedGroups = reactive({})
 
 let mapInstance = null
 let realMlMap = null
@@ -96,45 +85,118 @@ let glLayerNormal = null
 let glLayerDebug = null
 let currentActiveLayer = null
 
-// 定義三大類別及其對應的圖層 ID 清單與當前設定的樣式數值
-const categories = reactive({
-  normal: { ids: [], length: 0, color: '#2c3e50', width: 2 },
-  layer5K: { ids: [], length: 0, color: '#e67e22', width: 3 },
-  layer1K: { ids: [], length: 0, color: '#e74c3c', width: 4 }
+// OSP 圖層的控制狀態
+const ospConfig = reactive({
+  visible: true,
+  color: '#d3d3d3', // 淺灰色
+  width: 2
 })
 
-// 執行樣式更新的核心邏輯
-const updateCategoryStyle = (categoryKey) => {
-  if (!realMlMap) {
-    console.warn('⚠️ [Debug] MapLibre 實例尚未就緒')
-    return
-  }
+// 儲存按 Zoom Level 分類的動態圖層清單
+const dynamicLayersByZoom = ref({})
 
-  const cat = categories[categoryKey]
-  let successCount = 0
-  cat.ids.forEach(id => {
-    try {
-      const layer = realMlMap.getLayer(id)
-      if (layer) {
-        if (layer.type === 'line') {
-          realMlMap.setPaintProperty(id, 'line-color', cat.color)
-          realMlMap.setPaintProperty(id, 'line-width', cat.width)
-          successCount++
-        } else if (layer.type === 'fill') {
-          realMlMap.setPaintProperty(id, 'fill-color', cat.color)
-          successCount++
-        } else if (layer.type === 'circle') {
-          realMlMap.setPaintProperty(id, 'circle-color', cat.color)
-          realMlMap.setPaintProperty(id, 'circle-radius', cat.width)
-          successCount++
-        }
-      }
-    } catch (err) {
-      // 略過不支援的屬性
+// 計算屬性：根據搜尋關鍵字即時過濾圖層
+const filteredLayersByZoom = computed(() => {
+  if (!searchKeyword.value.trim()) {
+    return dynamicLayersByZoom.value
+  }
+  const keyword = searchKeyword.value.toLowerCase()
+  const result = {}
+
+  Object.keys(dynamicLayersByZoom.value).forEach(zoomLevel => {
+    const matchedLayers = dynamicLayersByZoom.value[zoomLevel].filter(layer => 
+      layer.id.toLowerCase().includes(keyword)
+    )
+    if (matchedLayers.length > 0) {
+      result[zoomLevel] = matchedLayers
     }
   })
+  return result
+})
+
+// 切換特定 Zoom 群組的收合/展開
+const toggleGroupCollapse = (zoomLevel) => {
+  collapsedGroups[zoomLevel] = !collapsedGroups[zoomLevel]
 }
 
+// 自動從 MapLibre 實例提取所有圖層並分類
+const extractAndGroupLayers = () => {
+  if (!realMlMap) return
+  const style = realMlMap.getStyle()
+  if (!style || !style.layers) return
+
+  const groups = {}
+
+  style.layers.forEach(layer => {
+    const minZoom = layer.minzoom !== undefined ? layer.minzoom : 0
+    if (!groups[minZoom]) {
+      groups[minZoom] = []
+    }
+
+    const type = layer.type
+    let defaultColor = '#3388ff'
+    let defaultWidth = 2
+    let hasColor = false
+    let hasWidth = false
+
+    if (layer.paint) {
+      if (layer.paint['line-color']) { hasColor = true; defaultColor = layer.paint['line-color'] }
+      else if (layer.paint['fill-color']) { hasColor = true; defaultColor = layer.paint['fill-color'] }
+      else if (layer.paint['circle-color']) { hasColor = true; defaultColor = layer.paint['circle-color'] }
+
+      if (layer.paint['line-width']) { hasWidth = true; defaultWidth = layer.paint['line-width'] }
+      else if (layer.paint['circle-radius']) { hasWidth = true; defaultWidth = layer.paint['circle-radius'] }
+    }
+
+    groups[minZoom].push({
+      id: layer.id,
+      type: type,
+      visible: realMlMap.getLayoutProperty(layer.id, 'visibility') !== 'none',
+      color: typeof defaultColor === 'string' ? defaultColor : '#3388ff',
+      width: typeof defaultWidth === 'number' ? defaultWidth : 2,
+      hasColor: hasColor || type === 'line' || type === 'fill' || type === 'circle',
+      hasWidth: hasWidth || type === 'line' || type === 'circle'
+    })
+  })
+
+  dynamicLayersByZoom.value = groups
+  console.log('📊 [Dynamic Layers] 已成功按 Zoom Level 分類圖層:', groups)
+}
+
+// 1. 切換圖層 On/Off
+const toggleLayerVisibility = (layer) => {
+  if (!realMlMap) return
+  const visibility = layer.visible ? 'visible' : 'none'
+  try {
+    realMlMap.setLayoutProperty(layer.id, 'visibility', visibility)
+  } catch (e) {
+    console.warn(`切換圖層 ${layer.id} 顯隱失敗:`, e)
+  }
+}
+
+// 2. 調整圖層顏色
+const updateLayerColor = (layer) => {
+  if (!realMlMap) return
+  try {
+    const prop = layer.type === 'fill' ? 'fill-color' : layer.type === 'circle' ? 'circle-color' : 'line-color'
+    realMlMap.setPaintProperty(layer.id, prop, layer.color)
+  } catch (e) {
+    console.warn(`設定圖層 ${layer.id} 顏色失敗:`, e)
+  }
+}
+
+// 3. 調整圖層大小 / 粗幼
+const updateLayerWidth = (layer) => {
+  if (!realMlMap) return
+  try {
+    const prop = layer.type === 'circle' ? 'circle-radius' : 'line-width'
+    realMlMap.setPaintProperty(layer.id, prop, layer.width)
+  } catch (e) {
+    console.warn(`設定圖層 ${layer.id} 粗幼失敗:`, e)
+  }
+}
+
+// 捕捉 MapLibre 實例並萃取圖層
 const captureMapInstance = (layer) => {
   const findMaplibreInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
@@ -156,120 +218,42 @@ const captureMapInstance = (layer) => {
       realMlMap = instance
       window.mlMap = realMlMap
       console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
-      
-      // ★ 自動動態偵測 PBF 內的 Layer 並強制掛載 OSP_MARK_LINE
-      try {
-        const style = realMlMap.getStyle()
-        if (style && style.sources) {
-          const vKey = Object.keys(style.sources).find(k => style.sources[k].type === 'vector')
-          
-          if (vKey) {
-            // 嘗試常見的幾種大小寫變體，確保一定能中一個
-            const possibleNames = ['OSP_MARK_LINE', 'osp_mark_line', 'OSP-MARK-LINE', 'osp-mark-line']
-            
-            possibleNames.forEach((layerName, index) => {
-              const layerId = `osp-mark-line-layer-${index}`
-              if (!realMlMap.getLayer(layerId)) {
-                try {
-                  realMlMap.addLayer({
-                    id: layerId,
-                    type: 'line',
-                    source: vKey,
-                    'source-layer': layerName,
-                    minzoom: 0,
-                    maxzoom: 24,
-                    paint: {
-                      'line-color': index === 0 ? '#00ff00' : '#ffff00', // 第一個用綠，第二個用黃以資區別
-                      'line-width': 6
-                    }
-                  })
-                  console.log(`✨ 成功嘗試掛載 source-layer: [${layerName}] (ID: ${layerId})`)
-                } catch (e) {
-                  // 略過不匹配的名稱
-                }
-              }
-            })
-
-            // 強制將它們移到最頂層
-            setTimeout(() => {
-              possibleNames.forEach((_, index) => {
-                const layerId = `osp-mark-line-layer-${index}`
-                if (realMlMap.getLayer(layerId)) {
-                  realMlMap.moveLayer(layerId)
-                  const feats = realMlMap.queryRenderedFeatures({ layers: [layerId] })
-                  console.log(`🔍 檢查圖層 [${layerId}] 當前畫面上的特徵數: ${feats.length}`)
-                }
-              })
-            }, 500)
-          }
-        }
-      } catch (e) {
-        console.warn('⚠️ 掛載 OSP_MARK_LINE 失敗:', e)
-      }
-
-      // 確保實例就緒後立刻更新當前類別樣式
-      updateCategoryStyle('normal')
-      updateCategoryStyle('layer5K')
-      updateCategoryStyle('layer1K')
+      extractAndGroupLayers()
     } else {
       setTimeout(checkInstance, 100)
     }
   }
   checkInstance()
+
+  // 確保 OSP 圖層永遠在最頂層渲染
+  try {
+    if (realMlMap.getLayer('osp-mark-line-layer')) {
+      realMlMap.moveLayer('osp-mark-line-layer')
+      console.log('🔝 已將 osp-mark-line-layer 移動到最頂層')
+    }
+  } catch (e) {
+    console.warn('移動圖層失敗:', e)
+  }
+
 }
 
 // 切換 Debug Mode
 const switchDebugMode = () => {
   if (!mapInstance) return
 
-  // 1. 移除當前圖層
   if (currentActiveLayer && mapInstance.hasLayer(currentActiveLayer)) {
     mapInstance.removeLayer(currentActiveLayer)
   }
 
-  // 2. 根據模式加入對應圖層
   if (debugMode.value === 'Y') {
-    console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 \public\tiles\ pbf)')
+    console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 tiles pbf)')
     if (glLayerDebug) {
       glLayerDebug.addTo(mapInstance)
       currentActiveLayer = glLayerDebug
       captureMapInstance(glLayerDebug)
-
-      // ★ 強制直接在切換時掛載 OSP_MARK_LINE
-      setTimeout(() => {
-        if (realMlMap) {
-          try {
-            const style = realMlMap.getStyle()
-            const vKey = Object.keys(style.sources).find(k => style.sources[k].type === 'vector')
-            if (vKey) {
-              const targetLayerId = 'osp-mark-line-forced'
-              if (!realMlMap.getLayer(targetLayerId)) {
-                realMlMap.addLayer({
-                  id: targetLayerId,
-                  type: 'line',
-                  source: vKey,
-                  'source-layer': 'OSP_MARK_LINE',
-                  minzoom: 0,
-                  maxzoom: 24,
-                  paint: {
-                    'line-color': ospConfig.color, // 使用響應式變數（淺灰色）
-                    'line-width': ospConfig.width
-                  }
-                })
-                console.log('✨ [強制掛載] OSP_MARK_LINE 成功加入地圖！')
-              }
-              realMlMap.moveLayer(targetLayerId)
-              const feats = realMlMap.queryRenderedFeatures({ layers: [targetLayerId] })
-              console.log(`🔍 [強制檢查] 畫面上的 OSP_MARK_LINE 數量: ${feats.length}`)
-            }
-          } catch (e) {
-            console.error('❌ 強制掛載失敗:', e)
-          }
-        }
-      }, 500)
     }
   } else {
-    console.log('🌐 [Debug] 切換至 Debug Mode: N (使用線上 API)')
+    console.log('🌐 [Debug] 切換至 Debug Mode: N (線上 API)')
     if (glLayerNormal) {
       glLayerNormal.addTo(mapInstance)
       currentActiveLayer = glLayerNormal
@@ -280,35 +264,9 @@ const switchDebugMode = () => {
   setTimeout(() => {
     if (realMlMap) {
       realMlMap.resize()
+      extractAndGroupLayers()
     }
-  }, 200)
-}
-
-// OSP 圖層的控制狀態（預設顏色設為淺灰色 #d3d3d3 或 #95a5a6）
-const ospConfig = reactive({
-  visible: true,
-  color: '#d3d3d3', // 淺灰色
-  width: 2
-})
-
-// 更新 OSP 顯示/隱藏
-const updateOspVisibility = () => {
-  if (!realMlMap) return
-  const targetLayerId = 'osp-mark-line-forced'
-  if (realMlMap.getLayer(targetLayerId)) {
-    const visibility = ospConfig.visible ? 'visible' : 'none'
-    realMlMap.setLayoutProperty(targetLayerId, 'visibility', visibility)
-  }
-}
-
-// 更新 OSP 顏色與粗幼
-const updateOspStyle = () => {
-  if (!realMlMap) return
-  const targetLayerId = 'osp-mark-line-forced'
-  if (realMlMap.getLayer(targetLayerId)) {
-    realMlMap.setPaintProperty(targetLayerId, 'line-color', ospConfig.color)
-    realMlMap.setPaintProperty(targetLayerId, 'line-width', ospConfig.width)
-  }
+  }, 300)
 }
 
 onMounted(async () => {
@@ -330,23 +288,22 @@ onMounted(async () => {
 
   map.on('zoom', () => { currentZoom.value = Number(map.getZoom().toFixed(1)) })
 
-  // 字型轉譯攔截器
   const fontTransform = (url) => {
     let reqUrl = url
     if (reqUrl && reqUrl.includes('/fonts/')) {
       reqUrl = reqUrl.replace(/LianHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
-                   .replace(/LianHeiHK Bold/g, 'Noto Sans Bold')
-                   .replace(/LianHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
-                   .replace(/LianHeiHK Regular/g, 'Noto Sans Regular')
-                   .replace(/CyansHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
-                   .replace(/CyansHeiHK Bold/g, 'Noto Sans Bold')
-                   .replace(/CyansHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
-                   .replace(/CyansHeiHK Regular/g, 'Noto Sans Regular')
-                   .replace(/Arial%20Regular/g, 'Noto%20Sans%20Regular')
-                   .replace(/Arial Regular/g, 'Noto Sans Regular')
-                   .replace(/Arial%20Bold/g, 'Noto%20Sans%20Bold')
-                   .replace(/Arial Bold/g, 'Noto Sans Bold')
-                   .replace(/Arial/g, 'Noto%20Sans%20Regular')
+                     .replace(/LianHeiHK Bold/g, 'Noto Sans Bold')
+                     .replace(/LianHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
+                     .replace(/LianHeiHK Regular/g, 'Noto Sans Regular')
+                     .replace(/CyansHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
+                     .replace(/CyansHeiHK Bold/g, 'Noto Sans Bold')
+                     .replace(/CyansHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
+                     .replace(/CyansHeiHK Regular/g, 'Noto Sans Regular')
+                     .replace(/Arial%20Regular/g, 'Noto%20Sans%20Regular')
+                     .replace(/Arial Regular/g, 'Noto Sans Regular')
+                     .replace(/Arial%20Bold/g, 'Noto%20Sans%20Bold')
+                     .replace(/Arial Bold/g, 'Noto Sans Bold')
+                     .replace(/Arial/g, 'Noto%20Sans%20Regular')
     }
     return { url: reqUrl }
   }
@@ -354,15 +311,13 @@ onMounted(async () => {
   let mapStyleNormal = null
   let mapStyleDebug = null
 
-  // 1. 載入並處理線上 Basemap Style (Normal 與 Debug 雙版本)
+  // 1. 載入線上 Normal Style
   try {
     const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
     const res = await fetch(styleUrl)
     const textData = await res.text()
     const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
-    
     mapStyleNormal = JSON.parse(fixedText)
-    mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
 
     if (mapStyleNormal.sources) {
       Object.keys(mapStyleNormal.sources).forEach(key => {
@@ -374,59 +329,55 @@ onMounted(async () => {
         }
       })
     }
-
-    if (mapStyleDebug.sources) {
-      Object.keys(mapStyleDebug.sources).forEach(key => {
-        if (mapStyleDebug.sources[key].type === 'vector') {
-          mapStyleDebug.sources[key].maxzoom = 15
-          // 取得當前的 router base 或自動判斷
-          const basePath = import.meta.env.BASE_URL || '/'
-          mapStyleDebug.sources[key].tiles = [
-            `${window.location.origin}${basePath}tiles/{z}/{x}/{y}.pbf`
-          ]
-          delete mapStyleDebug.sources[key].bounds
-        }
-      })
-    }
-
-    if (mapStyleNormal.layers) {
-      const normalIds = []
-      const layer5KIds = []
-      const layer1KIds = []
-
-      mapStyleNormal.layers.forEach(layer => {
-        const sourceLayer = (layer['source-layer'] || '').toUpperCase()
-        const layerId = layer.id || ''
-        const layerIdLower = layerId.toLowerCase()
-
-        if (layerIdLower.includes('label') || layerIdLower.includes('text') || layer.type === 'symbol') {
-          return
-        }
-
-        if (sourceLayer.includes('1K') || layerIdLower.includes('1k')) {
-          layer.minzoom = 18
-          layer1KIds.push(layerId)
-        } else if (sourceLayer.includes('5K') || layerIdLower.includes('5k')) {
-          layer.minzoom = 15
-          layer5KIds.push(layerId)
-        } else {
-          normalIds.push(layerId)
-        }
-      })
-
-      categories.normal.ids = normalIds
-      categories.normal.length = normalIds.length
-      categories.layer5K.ids = layer5KIds
-      categories.layer5K.length = layer5KIds.length
-      categories.layer1K.ids = layer1KIds
-      categories.layer1K.length = layer1KIds.length
-    }
-
   } catch (err) {
-    console.error('❌ [Debug] Basemap 載入失敗:', err)
+    console.error('❌ [Debug] Basemap Normal 載入失敗:', err)
   }
 
-  // 2. 獨立載入並合併 Label Style 給雙版本
+  // 2. 建立 Debug Style (以 Normal 為藍本，將 tiles 指向本地並原生注入 OSP 確保完美顯示)
+  try {
+    if (mapStyleNormal) {
+      mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
+      const basePath = import.meta.env.BASE_URL || '/'
+
+      if (mapStyleDebug.sources) {
+        Object.keys(mapStyleDebug.sources).forEach(key => {
+          if (mapStyleDebug.sources[key].type === 'vector') {
+            mapStyleDebug.sources[key].maxzoom = 15
+            mapStyleDebug.sources[key].tiles = [
+              `${window.location.origin}${basePath}tiles/{z}/{x}/{y}.pbf`
+            ]
+            delete mapStyleDebug.sources[key].bounds
+          }
+        })
+
+        // 自動取得 Vector Source Key 並在記憶體中原生注入 OSP 圖層
+        const vKey = Object.keys(mapStyleDebug.sources).find(k => mapStyleDebug.sources[k].type === 'vector') || 'esri'
+        
+        if (mapStyleDebug.layers) {
+          const hasOsp = mapStyleDebug.layers.some(l => l.id === 'osp-mark-line-layer')
+          if (!hasOsp) {
+            mapStyleDebug.layers.push({
+              id: 'osp-mark-line-layer',
+              type: 'line',
+              source: vKey,
+              'source-layer': 'OSP_MARK_LINE',
+              minzoom: 0,
+              maxzoom: 24,
+              paint: {
+                'line-color': '#d3d3d3', // 恢復為預設淺灰色
+                'line-width': 2        // 恢復為 3px
+              }
+            })
+            console.log(`✨ [Debug Style] 成功在記憶體中原生注入 OSP 圖層至 source [${vKey}]`)
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('❌ [Debug] 建立 Debug Style 失敗:', err)
+  }
+
+  // 3. 獨立載入並合併 Label Style 給雙版本
   try {
     const styLabelUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/styles/root.json'
     const [resLabel1, resLabel2] = await Promise.all([fetch(styLabelUrl), fetch(styLabelUrl)])
@@ -477,7 +428,7 @@ onMounted(async () => {
     console.error('❌ [Debug] Label Style 載入失敗:', err)
   }
 
-  // 3. 建立圖層實例
+  // 4. 建立圖層實例
   if (mapStyleNormal) {
     glLayerNormal = L.maplibreGL({ style: mapStyleNormal, maxZoom: 20, transformRequest: fontTransform })
   }
@@ -506,108 +457,121 @@ onMounted(async () => {
 }
 .control-panel {
   position: absolute;
-  top: 15px;
-  right: 15px;
-  z-index: 1000;
-  width: 340px;
-  background: rgba(255, 255, 255, 0.95);
+  top: 10px;
+  left: 10px;
+  background: white;
+  padding: 12px;
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  max-height: 85vh;
+  width: 350px;
+  display: flex;
+  flex-direction: column;
+  z-index: 1000;
   font-family: sans-serif;
-  overflow: hidden;
 }
 .panel-header {
-  background: #2c3e50;
-  color: white;
-  padding: 10px 14px;
-  font-weight: bold;
-  font-size: 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.toggle-btn {
-  background: #34495e;
-  color: white;
-  border: 1px solid #4e6d8d;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  font-weight: bold;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s;
-  pointer-events: auto; /* 確保按鈕可點擊 */
-}
-.toggle-btn:hover {
-  background: #4e6d8d;
-}
-.panel-body {
-  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
-  max-height: 80vh;
-  overflow-y: auto;
-}
-.control-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.debug-box {
-  background: #e8f4f8;
-  padding: 6px 8px;
-  border-radius: 4px;
-  border: 1px solid #bbe1fa;
-}
-.select-input {
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid #ccc;
-  font-weight: bold;
-  background: white;
-}
-.category-box {
-  background: #f8f9fa;
-  border: 1px solid #e9ecef;
-  padding: 8px 10px;
-  border-radius: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.category-title {
-  font-weight: bold;
-  color: #2c3e50;
-  font-size: 12px;
-}
-.control-row {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  font-size: 11px;
 }
-.badge {
-  background: #3498db;
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: bold;
+}
+.zoom-badge {
+  background: #34495e;
   color: white;
   padding: 2px 8px;
   border-radius: 4px;
-  font-weight: bold;
+  font-size: 12px;
 }
-.hint-text {
-  font-size: 11px;
-  color: #666;
-  background: #fff3cd;
-  padding: 6px;
-  border-radius: 4px;
-  border: 1px solid #ffeeba;
+.search-row {
+  margin-top: 4px;
 }
-.osp-box {
-  background: #f1f2f6;
+.search-input {
+  width: 100%;
+  padding: 6px 8px;
   border: 1px solid #dcdde1;
+  border-radius: 4px;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.layer-groups-container {
+  overflow-y: auto;
+  flex: 1;
+  margin-top: 8px;
+  padding-right: 4px;
+}
+.zoom-group-box {
+  margin-bottom: 10px;
+  background: #f8f9fa;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #e9ecef;
+}
+.zoom-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  border-bottom: 1px solid #dee2e6;
+  padding-bottom: 4px;
+}
+.zoom-group-title {
+  font-weight: bold;
+  font-size: 11px;
+  color: #2c3e50;
+}
+.toggle-btn {
+  background: #dfe4ea;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  color: #2f3640;
+}
+.toggle-btn:hover {
+  background: #ced6e0;
+}
+.layer-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.layer-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 150px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.layer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layer-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.width-control {
+  gap: 2px;
+}
+.width-control input[type="range"] {
+  width: 50px;
+}
+.width-val {
+  font-size: 10px;
+  width: 25px;
+  text-align: right;
 }
 </style>
