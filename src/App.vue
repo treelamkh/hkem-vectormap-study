@@ -3,74 +3,85 @@
     <div ref="mapContainer" id="map"></div>
 
     <!-- 控制面板 -->
-    <div class="control-panel">
+    <div class="control-panel" :class="{ minimized: isPanelMinimized }">
       <!-- 頂部固定項目 -->
       <div class="panel-header">
-        <div class="info-row">
-          <label>當前 Zoom:</label>
-          <span class="zoom-badge">{{ currentZoom }}</span>
-        </div>
-        <div class="info-row">
-          <label>Debug Mode:</label>
-          <select v-model="debugMode" @change="switchDebugMode">
-            <option value="N">N (線上 API)</option>
-            <option value="Y">Y (本地 tiles pbf)</option>
-          </select>
-        </div>
-        <!-- 手機陀螺儀旋轉開關 -->
-        <div class="info-row">
-          <label>陀螺儀旋轉:</label>
-          <button class="gyro-btn" :class="{ active: isGyroActive }" @click="toggleGyroCompass">
-            {{ isGyroActive ? '已開啟 (ON)' : '已關閉 (OFF)' }}
+        <div class="panel-title-row">
+          <span class="panel-main-title">🗺️ 圖層與控制台</span>
+          <button class="minimize-btn" @click="togglePanelMinimize">
+            {{ isPanelMinimized ? '展開 ＋' : '最小化 －' }}
           </button>
         </div>
-        <!-- 快速搜尋框 -->
-        <div class="search-row">
-          <input 
-            type="text" 
-            v-model="searchKeyword" 
-            placeholder="🔍 快速搜尋 Layer Name..." 
-            class="search-input"
-          />
+
+        <div v-show="!isPanelMinimized">
+          <div class="info-row">
+            <label>當前 Zoom:</label>
+            <span class="zoom-badge">{{ currentZoom }}</span>
+          </div>
+          <div class="info-row">
+            <label>Debug Mode:</label>
+            <select v-model="debugMode" @change="switchDebugMode">
+              <option value="N">N (線上 API)</option>
+              <option value="Y">Y (本地 tiles pbf)</option>
+            </select>
+          </div>
+          <!-- 手機陀螺儀旋轉開關 -->
+          <div class="info-row">
+            <label>陀螺儀旋轉:</label>
+            <button class="gyro-btn" :class="{ active: isGyroActive }" @click="toggleGyroCompass">
+              {{ isGyroActive ? '已開啟 (ON)' : '已關閉 (OFF)' }}
+            </button>
+          </div>
+          <!-- 快速搜尋框 -->
+          <div class="search-row">
+            <input 
+              type="text" 
+              v-model="searchKeyword" 
+              placeholder="🔍 快速搜尋 Layer Name..." 
+              class="search-input"
+            />
+          </div>
         </div>
       </div>
 
-      <hr />
+      <template v-if="!isPanelMinimized">
+        <hr />
 
-      <!-- 動態按 Zoom Level 分類的圖層控制清單 -->
-      <div class="layer-groups-container">
-        <div v-for="(layers, zoomLevel) in filteredLayersByZoom" :key="zoomLevel" class="zoom-group-box">
-          <div class="zoom-group-header">
-            <span class="zoom-group-title">
-              Zoom Level: >= {{ zoomLevel }} (共 {{ layers.length }} 個圖層)
-            </span>
-            <button class="toggle-btn" @click="toggleGroupCollapse(zoomLevel)">
-              {{ collapsedGroups[zoomLevel] ? '展開 +' : '收起 -' }}
-            </button>
-          </div>
-          
-          <div class="zoom-content" v-show="!collapsedGroups[zoomLevel]">
-            <div v-for="layer in layers" :key="layer.id" class="layer-item-row">
-              <!-- 圖層名稱與類型 -->
-              <div class="layer-info">
-                <input type="checkbox" v-model="layer.visible" @change="toggleLayerVisibility(layer)" title="On/Off" />
-                <span class="layer-name" :title="layer.id">{{ layer.id }}</span>
-              </div>
+        <!-- 動態按 Zoom Level 分類的圖層控制清單 -->
+        <div class="layer-groups-container">
+          <div v-for="(layers, zoomLevel) in filteredLayersByZoom" :key="zoomLevel" class="zoom-group-box">
+            <div class="zoom-group-header">
+              <span class="zoom-group-title">
+                Zoom Level: >= {{ zoomLevel }} (共 {{ layers.length }} 個圖層)
+              </span>
+              <button class="toggle-btn" @click="toggleGroupCollapse(zoomLevel)">
+                {{ collapsedGroups[zoomLevel] ? '展開 +' : '收起 -' }}
+              </button>
+            </div>
+            
+            <div class="zoom-content" v-show="!collapsedGroups[zoomLevel]">
+              <div v-for="layer in layers" :key="layer.id" class="layer-item-row">
+                <!-- 圖層名稱與類型 -->
+                <div class="layer-info">
+                  <input type="checkbox" v-model="layer.visible" @change="toggleLayerVisibility(layer)" title="On/Off" />
+                  <span class="layer-name" :title="layer.id">{{ layer.id }}</span>
+                </div>
 
-              <!-- 獨立功能: 調整顏色 -->
-              <div class="layer-controls" v-if="layer.hasColor">
-                <input type="color" v-model="layer.color" @change="updateLayerColor(layer)" title="調整顏色" />
-              </div>
+                <!-- 獨立功能: 調整顏色 -->
+                <div class="layer-controls" v-if="layer.hasColor">
+                  <input type="color" v-model="layer.color" @change="updateLayerColor(layer)" title="調整顏色" />
+                </div>
 
-              <!-- 獨立功能: 調整大小 / 粗幼 -->
-              <div class="layer-controls width-control" v-if="layer.hasWidth">
-                <input type="range" min="1" max="20" step="0.5" v-model.number="layer.width" @input="updateLayerWidth(layer)" title="調整粗幼" />
-                <span class="width-val">{{ layer.width }}px</span>
+                <!-- 獨立功能: 調整大小 / 粗幼 -->
+                <div class="layer-controls width-control" v-if="layer.hasWidth">
+                  <input type="range" min="1" max="20" step="0.5" v-model.number="layer.width" @input="updateLayerWidth(layer)" title="調整粗幼" />
+                  <span class="width-val">{{ layer.width }}px</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 </template>
@@ -83,6 +94,7 @@ const mapContainer = ref(null)
 const debugMode = ref('N')
 const searchKeyword = ref('')
 const isGyroActive = ref(false)
+const isPanelMinimized = ref(false) // 控制面板最小化狀態
 
 // 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
 const collapsedGroups = reactive({})
@@ -127,14 +139,16 @@ const toggleGroupCollapse = (zoomLevel) => {
   collapsedGroups[zoomLevel] = !collapsedGroups[zoomLevel]
 }
 
+// 切換整個控制面板的最小化/展開
+const togglePanelMinimize = () => {
+  isPanelMinimized.value = !isPanelMinimized.value
+}
+
 // 處理手機陀螺儀事件回調
 const handleDeviceOrientation = (event) => {
   if (!realMlMap) return
-  // event.alpha 為手機繞 Z 軸旋轉的角度 (0~360度)，代表指南針方位
   const alpha = event.alpha
   if (alpha !== null && alpha !== undefined) {
-    // MapLibre 的 rotateTo 接受 bearing，使地圖跟隨手機轉動
-    // 部分瀏覽器或裝置可能需要用 360 - alpha，依實際手機測試效果為主
     const bearing = 360 - alpha
     realMlMap.rotateTo(bearing, { duration: 0 })
   }
@@ -143,16 +157,13 @@ const handleDeviceOrientation = (event) => {
 // 啟動或關閉陀螺儀地圖旋轉
 const toggleGyroCompass = async () => {
   if (isGyroActive.value) {
-    // 關閉陀螺儀監聽
     window.removeEventListener('deviceorientation', handleDeviceOrientation)
     isGyroActive.value = false
-    // 恢復地圖正北朝上
     if (realMlMap) {
       realMlMap.rotateTo(0, { duration: 300 })
     }
     console.log('🧭 陀螺儀地圖旋轉已關閉')
   } else {
-    // 檢查是否為 iOS 13+ 裝置並需要請求授權
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
         const permissionState = await DeviceOrientationEvent.requestPermission()
@@ -167,7 +178,6 @@ const toggleGyroCompass = async () => {
         console.error('❌ 請求陀螺儀權限失敗:', error)
       }
     } else if ('ondeviceorientation' in window) {
-      // Android 或標準瀏覽器直接監聽
       window.addEventListener('deviceorientation', handleDeviceOrientation)
       isGyroActive.value = true
       console.log('🧭 陀螺儀監聽已直接啟動')
@@ -218,7 +228,6 @@ const extractAndGroupLayers = () => {
   })
 
   dynamicLayersByZoom.value = groups
-  console.log('📊 [Dynamic Layers] 已成功按 Zoom Level 分類圖層:', groups)
 }
 
 // 1. 切換圖層 On/Off
@@ -275,9 +284,7 @@ const captureMapInstance = (layer) => {
     if (instance) {
       realMlMap = instance
       window.mlMap = realMlMap
-      console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
 
-      // 強制將 OSP 移至最頂層
       try {
         if (realMlMap.getLayer('osp-mark-line-layer')) {
           realMlMap.moveLayer('osp-mark-line-layer')
@@ -303,14 +310,12 @@ const switchDebugMode = () => {
   }
 
   if (debugMode.value === 'Y') {
-    console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 tiles pbf)')
     if (glLayerDebug) {
       glLayerDebug.addTo(mapInstance)
       currentActiveLayer = glLayerDebug
       captureMapInstance(glLayerDebug)
     }
   } else {
-    console.log('🌐 [Debug] 切換至 Debug Mode: N (線上 API)')
     if (glLayerNormal) {
       glLayerNormal.addTo(mapInstance)
       currentActiveLayer = glLayerNormal
@@ -390,7 +395,7 @@ onMounted(async () => {
     console.error('❌ [Debug] Basemap Normal 載入失敗:', err)
   }
 
-  // 2. 建立 Debug Style (以 Normal 為藍本，將 tiles 指向本地並原生注入 OSP 確保完美顯示)
+  // 2. 建立 Debug Style
   try {
     if (mapStyleNormal) {
       mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
@@ -407,7 +412,6 @@ onMounted(async () => {
           }
         })
 
-        // 自動取得 Vector Source Key 並在記憶體中原生注入 OSP 圖層
         const vKey = Object.keys(mapStyleDebug.sources).find(k => mapStyleDebug.sources[k].type === 'vector') || 'esri'
         
         if (mapStyleDebug.layers) {
@@ -500,7 +504,6 @@ onMounted(async () => {
   }
 })
 
-// 組件卸載時自動清理監聽器，避免記憶體洩漏
 onUnmounted(() => {
   window.removeEventListener('deviceorientation', handleDeviceOrientation)
 })
@@ -530,11 +533,38 @@ onUnmounted(() => {
   flex-direction: column;
   z-index: 1000;
   font-family: sans-serif;
+  transition: width 0.2s ease, padding 0.2s ease;
+}
+.control-panel.minimized {
+  width: 180px;
+  max-height: auto;
+  padding: 8px 12px;
 }
 .panel-header {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: bold;
+  font-size: 13px;
+  color: #2c3e50;
+}
+.minimize-btn {
+  background: #dfe4ea;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #2f3640;
+  font-weight: bold;
+}
+.minimize-btn:hover {
+  background: #ced6e0;
 }
 .info-row {
   display: flex;
@@ -542,6 +572,7 @@ onUnmounted(() => {
   justify-content: space-between;
   font-size: 13px;
   font-weight: bold;
+  margin-top: 4px;
 }
 .zoom-badge {
   background: #34495e;
@@ -615,7 +646,6 @@ onUnmounted(() => {
   background: #ced6e0;
 }
 .layer-item-row {
-  data-v-inspector: ...;
   display: flex;
   align-items: center;
   justify-content: space-between;
