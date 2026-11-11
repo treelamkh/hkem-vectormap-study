@@ -94,7 +94,7 @@ const mapContainer = ref(null)
 const debugMode = ref('N')
 const searchKeyword = ref('')
 const isGyroActive = ref(false)
-const isPanelMinimized = ref(false) // 控制面板最小化狀態
+const isPanelMinimized = ref(false)
 
 // 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
 const collapsedGroups = reactive({})
@@ -109,7 +109,7 @@ let currentActiveLayer = null
 const ospConfig = reactive({
   visible: true,
   color: '#d3d3d3', // 淺灰色
-  width: 3
+  width: 2
 })
 
 // 儲存按 Zoom Level 分類的動態圖層清單
@@ -228,6 +228,7 @@ const extractAndGroupLayers = () => {
   })
 
   dynamicLayersByZoom.value = groups
+  console.log('📊 [Dynamic Layers] 已成功按 Zoom Level 分類圖層:', groups)
 }
 
 // 1. 切換圖層 On/Off
@@ -263,7 +264,7 @@ const updateLayerWidth = (layer) => {
   }
 }
 
-// 捕捉 MapLibre 實例並萃取圖層與確保 OSP 在最頂層
+// 捕捉 MapLibre 實例並萃取圖層
 const captureMapInstance = (layer) => {
   const findMaplibreInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
@@ -284,10 +285,13 @@ const captureMapInstance = (layer) => {
     if (instance) {
       realMlMap = instance
       window.mlMap = realMlMap
+      console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
 
+      // 確保 OSP 圖層永遠在最頂層渲染
       try {
         if (realMlMap.getLayer('osp-mark-line-layer')) {
           realMlMap.moveLayer('osp-mark-line-layer')
+          console.log('🔝 已將 osp-mark-line-layer 移動到最頂層')
         }
       } catch (e) {
         console.warn('移動圖層失敗:', e)
@@ -310,12 +314,14 @@ const switchDebugMode = () => {
   }
 
   if (debugMode.value === 'Y') {
+    console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 tiles pbf)')
     if (glLayerDebug) {
       glLayerDebug.addTo(mapInstance)
       currentActiveLayer = glLayerDebug
       captureMapInstance(glLayerDebug)
     }
   } else {
+    console.log('🌐 [Debug] 切換至 Debug Mode: N (線上 API)')
     if (glLayerNormal) {
       glLayerNormal.addTo(mapInstance)
       currentActiveLayer = glLayerNormal
@@ -395,7 +401,7 @@ onMounted(async () => {
     console.error('❌ [Debug] Basemap Normal 載入失敗:', err)
   }
 
-  // 2. 建立 Debug Style
+  // 2. 建立 Debug Style (以 Normal 為藍本，將 tiles 指向本地並原生注入 OSP 確保完美顯示)
   try {
     if (mapStyleNormal) {
       mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
@@ -412,12 +418,13 @@ onMounted(async () => {
           }
         })
 
+        // 自動取得 Vector Source Key 並在記憶體中原生注入 OSP 圖層
         const vKey = Object.keys(mapStyleDebug.sources).find(k => mapStyleDebug.sources[k].type === 'vector') || 'esri'
         
         if (mapStyleDebug.layers) {
           const hasOsp = mapStyleDebug.layers.some(l => l.id === 'osp-mark-line-layer')
           if (!hasOsp) {
-            mapStyleDebug.layers.unshift({
+            mapStyleDebug.layers.push({
               id: 'osp-mark-line-layer',
               type: 'line',
               source: vKey,
@@ -425,10 +432,11 @@ onMounted(async () => {
               minzoom: 0,
               maxzoom: 24,
               paint: {
-                'line-color': '#d3d3d3',
-                'line-width': 3
+                'line-color': '#d3d3d3', // 恢復為預設淺灰色
+                'line-width': 2          // 恢復為 2px
               }
             })
+            console.log(`✨ [Debug Style] 成功在記憶體中原生注入 OSP 圖層至 source [${vKey}]`)
           }
         }
       }
@@ -572,7 +580,6 @@ onUnmounted(() => {
   justify-content: space-between;
   font-size: 13px;
   font-weight: bold;
-  margin-top: 4px;
 }
 .zoom-badge {
   background: #34495e;
