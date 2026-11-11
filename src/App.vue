@@ -44,6 +44,16 @@
               <span class="layer-label">MapLibre 點圖層</span>
               <input type="checkbox" v-model="maplibreGeoJsonVisible" @change="toggleMaplibreGeoJson" />
             </div>
+            <!-- 控制 tlamp20.png Icon 大小 -->
+            <div class="info-row custom-layer-row slider-row">
+              <span class="layer-label">紅綠燈大小: {{ tlampIconSize }}x</span>
+              <input type="range" min="0.1" max="1.5" step="0.05" v-model.number="tlampIconSize" @input="updateTlampIconSize" />
+            </div>
+            <!-- 控制 Map Label 文字大小 -->
+            <div class="info-row custom-layer-row slider-row">
+              <span class="layer-label">Label 字體: {{ labelTextSize }}px</span>
+              <input type="range" min="10" max="24" step="1" v-model.number="labelTextSize" @input="updateLabelTextSize" />
+            </div>
           </div>
 
           <!-- 快速搜尋框 -->
@@ -110,9 +120,13 @@ const searchKeyword = ref('')
 const isGyroActive = ref(false)
 const isPanelMinimized = ref(false)
 
-// 自訂 GeoJSON 圖層開關狀態
-const leafletGeoJsonVisible = ref(true)
-const maplibreGeoJsonVisible = ref(true)
+// 預設關閉兩個 3DPN 點圖層
+const leafletGeoJsonVisible = ref(false)
+const maplibreGeoJsonVisible = ref(false)
+
+// 調整大小的響應式變數
+const tlampIconSize = ref(0.35)
+const labelTextSize = ref(12)
 
 // 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
 const collapsedGroups = reactive({})
@@ -129,7 +143,7 @@ let leafletGeoJsonLayer = null
 // OSP 圖層的控制狀態
 const ospConfig = reactive({
   visible: true,
-  color: '#d3d3d3', // 淺灰色
+  color: '#d3d3d3',
   width: 2
 })
 
@@ -186,6 +200,32 @@ const toggleMaplibreGeoJson = () => {
   }
 }
 
+// 3. 即時調整 tlamp20.png Icon 大小
+const updateTlampIconSize = () => {
+  if (!realMlMap) return
+  const layerId = 'pedestrian-point-tlamp-layer'
+  if (realMlMap.getLayer(layerId)) {
+    realMlMap.setLayoutProperty(layerId, 'icon-size', tlampIconSize.value)
+  }
+}
+
+// 4. 即時調整 Map Label 字體大小
+const updateLabelTextSize = () => {
+  if (!realMlMap) return
+  const style = realMlMap.getStyle()
+  if (!style || !style.layers) return
+
+  style.layers.forEach(layer => {
+    if (layer.type === 'symbol' && layer.layout && layer.layout['text-field']) {
+      try {
+        realMlMap.setLayoutProperty(layer.id, 'text-size', labelTextSize.value)
+      } catch (e) {
+        // 忽略不支援 text-size 的圖層
+      }
+    }
+  })
+}
+
 // 載入並初始化自訂 GeoJSON 資料
 const initCustomGeoJsonLayers = async (map, mlMap) => {
   try {
@@ -195,7 +235,6 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
 
     const L = window.L
 
-    // A. 加入 Leaflet 獨立圖層 (預設加入並置頂)
     if (leafletGeoJsonLayer && map.hasLayer(leafletGeoJsonLayer)) {
       map.removeLayer(leafletGeoJsonLayer)
     }
@@ -222,7 +261,6 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
       leafletGeoJsonLayer.bringToFront()
     }
 
-    // B. 加入 MapLibre 獨立 Source 與 Layer
     const sourceId = 'custom-3dpn-source'
     const layerId = 'custom-3dpn-maplibre-layer'
 
@@ -242,6 +280,9 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
         source: sourceId,
         minzoom: 0,
         maxzoom: 24,
+        layout: {
+          visibility: maplibreGeoJsonVisible.value ? 'visible' : 'none'
+        },
         paint: {
           'circle-radius': 5,
           'circle-color': '#0984e3',
@@ -251,12 +292,31 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
       })
     }
 
-    // 確保置頂
     mlMap.moveLayer(layerId)
-    console.log('✨ [GeoJson] 成功載入 3DPN_midpt_WGS84.geojson 點圖層！')
+    console.log('✨ [GeoJson] 成功載入 3DPN 點圖層！')
 
   } catch (err) {
     console.error('❌ [GeoJson] 載入失敗:', err)
+  }
+}
+
+// 載入與註冊 tlamp20.png 圖示至 MapLibre 核心
+const setupCustomIcons = (mlMap) => {
+  if (!mlMap) return
+  const basePath = import.meta.env.BASE_URL || '/'
+  const iconUrl = `${window.location.origin}${basePath}tlamp20.png`
+
+  if (!mlMap.hasImage('tlamp20-icon')) {
+    mlMap.loadImage(iconUrl, (error, image) => {
+      if (error) {
+        console.error('❌ [Icon Load] 載入 tlamp20.png 失敗:', error)
+        return
+      }
+      if (!mlMap.hasImage('tlamp20-icon')) {
+        mlMap.addImage('tlamp20-icon', image)
+        console.log('🚦 [Icon Load] 成功註冊 tlamp20-icon (PNG) 至 MapLibre！')
+      }
+    })
   }
 }
 
@@ -278,7 +338,6 @@ const toggleGyroCompass = async () => {
     if (realMlMap) {
       realMlMap.rotateTo(0, { duration: 300 })
     }
-    console.log('🧭 陀螺儀地圖旋轉已關閉')
   } else {
     if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
       try {
@@ -286,7 +345,6 @@ const toggleGyroCompass = async () => {
         if (permissionState === 'granted') {
           window.addEventListener('deviceorientation', handleDeviceOrientation)
           isGyroActive.value = true
-          console.log('🧭 iOS 陀螺儀授權成功並已啟動')
         } else {
           alert('權限被拒絕，無法使用陀螺儀旋轉地圖。')
         }
@@ -296,7 +354,6 @@ const toggleGyroCompass = async () => {
     } else if ('ondeviceorientation' in window) {
       window.addEventListener('deviceorientation', handleDeviceOrientation)
       isGyroActive.value = true
-      console.log('🧭 陀螺儀監聽已直接啟動')
     } else {
       alert('您的瀏覽器或裝置不支援陀螺儀感測器。')
     }
@@ -344,7 +401,6 @@ const extractAndGroupLayers = () => {
   })
 
   dynamicLayersByZoom.value = groups
-  console.log('📊 [Dynamic Layers] 已成功按 Zoom Level 分類圖層:', groups)
 }
 
 // 1. 切換圖層 On/Off
@@ -380,7 +436,7 @@ const updateLayerWidth = (layer) => {
   }
 }
 
-// 捕捉 MapLibre 實例並萃取圖層
+// 捕捉 MapLibre 實例並進行頂層層級排列
 const captureMapInstance = (layer) => {
   const findMaplibreInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
@@ -401,13 +457,18 @@ const captureMapInstance = (layer) => {
     if (instance) {
       realMlMap = instance
       window.mlMap = realMlMap
-      console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
 
-      // 確保 OSP 與 MapLibre 點圖層永遠在最頂層渲染
+      setupCustomIcons(realMlMap)
+
       try {
+        if (realMlMap.getLayer('td-polygon-layer')) {
+          realMlMap.moveLayer('td-polygon-layer')
+        }
         if (realMlMap.getLayer('osp-mark-line-layer')) {
           realMlMap.moveLayer('osp-mark-line-layer')
-          console.log('🔝 已將 osp-mark-line-layer 移動到最頂層')
+        }
+        if (realMlMap.getLayer('pedestrian-point-tlamp-layer')) {
+          realMlMap.moveLayer('pedestrian-point-tlamp-layer')
         }
         if (realMlMap.getLayer('custom-3dpn-maplibre-layer')) {
           realMlMap.moveLayer('custom-3dpn-maplibre-layer')
@@ -416,7 +477,6 @@ const captureMapInstance = (layer) => {
         console.warn('移動圖層失敗:', e)
       }
 
-      // 初始化載入自訂 GeoJSON 雙圖層
       initCustomGeoJsonLayers(mapInstance, realMlMap)
       extractAndGroupLayers()
     } else {
@@ -435,14 +495,12 @@ const switchDebugMode = () => {
   }
 
   if (debugMode.value === 'Y') {
-    console.log('🛠️ [Debug] 切換至 Debug Mode: Y (使用本地 tiles pbf)')
     if (glLayerDebug) {
       glLayerDebug.addTo(mapInstance)
       currentActiveLayer = glLayerDebug
       captureMapInstance(glLayerDebug)
     }
   } else {
-    console.log('🌐 [Debug] 切換至 Debug Mode: N (線上 API)')
     if (glLayerNormal) {
       glLayerNormal.addTo(mapInstance)
       currentActiveLayer = glLayerNormal
@@ -522,7 +580,7 @@ onMounted(async () => {
     console.error('❌ [Debug] Basemap Normal 載入失敗:', err)
   }
 
-  // 2. 建立 Debug Style (以 Normal 為藍本，將 tiles 指向本地並原生注入 OSP 確保完美顯示)
+  // 2. 建立 Debug Style
   try {
     if (mapStyleNormal) {
       mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
@@ -539,10 +597,10 @@ onMounted(async () => {
           }
         })
 
-        // 自動取得 Vector Source Key 並在記憶體中原生注入 OSP 圖層
         const vKey = Object.keys(mapStyleDebug.sources).find(k => mapStyleDebug.sources[k].type === 'vector') || 'esri'
         
         if (mapStyleDebug.layers) {
+          // A. 注入 OSP 線圖層 (設定 minzoom: 16)
           const hasOsp = mapStyleDebug.layers.some(l => l.id === 'osp-mark-line-layer')
           if (!hasOsp) {
             mapStyleDebug.layers.push({
@@ -550,14 +608,49 @@ onMounted(async () => {
               type: 'line',
               source: vKey,
               'source-layer': 'OSP_MARK_LINE',
+              minzoom: 16, // 改為 16 級才顯示
+              maxzoom: 24,
+              paint: {
+                'line-color': '#d3d3d3',
+                'line-width': 2
+              }
+            })
+          }
+
+          // B. 注入 TD_Polygon 面圖層 (維持預設 0 級或依需求)
+          const hasTdPoly = mapStyleDebug.layers.some(l => l.id === 'td-polygon-layer')
+          if (!hasTdPoly) {
+            mapStyleDebug.layers.push({
+              id: 'td-polygon-layer',
+              type: 'fill',
+              source: vKey,
+              'source-layer': 'TD_Polygon',
               minzoom: 0,
               maxzoom: 24,
               paint: {
-                'line-color': '#d3d3d3', // 恢復為預設淺灰色
-                'line-width': 2          // 恢復為 2px
+                'fill-color': '#ffdf6a',
+                'fill-opacity': 0.6
               }
             })
-            console.log(`✨ [Debug Style] 成功在記憶體中原生注入 OSP 圖層至 source [${vKey}]`)
+          }
+
+          // C. 注入 PedestrianPoint 紅綠燈圖層 (設定 minzoom: 16)
+          const hasPedPoint = mapStyleDebug.layers.some(l => l.id === 'pedestrian-point-tlamp-layer')
+          if (!hasPedPoint) {
+            mapStyleDebug.layers.push({
+              id: 'pedestrian-point-tlamp-layer',
+              type: 'symbol',
+              source: vKey,
+              'source-layer': 'PedestrianPoint',
+              filter: ['==', ['get', 'FeatureType'], 30],
+              minzoom: 16, // 改為 16 級才顯示
+              maxzoom: 24,
+              layout: {
+                'icon-image': 'tlamp20-icon',
+                'icon-size': tlampIconSize.value,
+                'icon-allow-overlap': true
+              }
+            })
           }
         }
       }
@@ -740,7 +833,16 @@ onUnmounted(() => {
 .custom-layer-row {
   font-size: 11px;
   font-weight: normal;
-  margin-top: 2px;
+  margin-top: 4px;
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.slider-row input[type="range"] {
+  width: 120px;
 }
 .layer-label {
   color: #333;
