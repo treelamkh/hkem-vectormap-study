@@ -17,6 +17,13 @@
             <option value="Y">Y (本地 tiles pbf)</option>
           </select>
         </div>
+        <!-- 手機陀螺儀旋轉開關 -->
+        <div class="info-row">
+          <label>陀螺儀旋轉:</label>
+          <button class="gyro-btn" :class="{ active: isGyroActive }" @click="toggleGyroCompass">
+            {{ isGyroActive ? '已開啟 (ON)' : '已關閉 (OFF)' }}
+          </button>
+        </div>
         <!-- 快速搜尋框 -->
         <div class="search-row">
           <input 
@@ -69,12 +76,13 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, computed } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, computed } from 'vue'
 
 const currentZoom = ref(11)
 const mapContainer = ref(null)
 const debugMode = ref('N')
 const searchKeyword = ref('')
+const isGyroActive = ref(false)
 
 // 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
 const collapsedGroups = reactive({})
@@ -89,7 +97,7 @@ let currentActiveLayer = null
 const ospConfig = reactive({
   visible: true,
   color: '#d3d3d3', // 淺灰色
-  width: 2
+  width: 3
 })
 
 // 儲存按 Zoom Level 分類的動態圖層清單
@@ -117,6 +125,56 @@ const filteredLayersByZoom = computed(() => {
 // 切換特定 Zoom 群組的收合/展開
 const toggleGroupCollapse = (zoomLevel) => {
   collapsedGroups[zoomLevel] = !collapsedGroups[zoomLevel]
+}
+
+// 處理手機陀螺儀事件回調
+const handleDeviceOrientation = (event) => {
+  if (!realMlMap) return
+  // event.alpha 為手機繞 Z 軸旋轉的角度 (0~360度)，代表指南針方位
+  const alpha = event.alpha
+  if (alpha !== null && alpha !== undefined) {
+    // MapLibre 的 rotateTo 接受 bearing，使地圖跟隨手機轉動
+    // 部分瀏覽器或裝置可能需要用 360 - alpha，依實際手機測試效果為主
+    const bearing = 360 - alpha
+    realMlMap.rotateTo(bearing, { duration: 0 })
+  }
+}
+
+// 啟動或關閉陀螺儀地圖旋轉
+const toggleGyroCompass = async () => {
+  if (isGyroActive.value) {
+    // 關閉陀螺儀監聽
+    window.removeEventListener('deviceorientation', handleDeviceOrientation)
+    isGyroActive.value = false
+    // 恢復地圖正北朝上
+    if (realMlMap) {
+      realMlMap.rotateTo(0, { duration: 300 })
+    }
+    console.log('🧭 陀螺儀地圖旋轉已關閉')
+  } else {
+    // 檢查是否為 iOS 13+ 裝置並需要請求授權
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        const permissionState = await DeviceOrientationEvent.requestPermission()
+        if (permissionState === 'granted') {
+          window.addEventListener('deviceorientation', handleDeviceOrientation)
+          isGyroActive.value = true
+          console.log('🧭 iOS 陀螺儀授權成功並已啟動')
+        } else {
+          alert('權限被拒絕，無法使用陀螺儀旋轉地圖。')
+        }
+      } catch (error) {
+        console.error('❌ 請求陀螺儀權限失敗:', error)
+      }
+    } else if ('ondeviceorientation' in window) {
+      // Android 或標準瀏覽器直接監聽
+      window.addEventListener('deviceorientation', handleDeviceOrientation)
+      isGyroActive.value = true
+      console.log('🧭 陀螺儀監聽已直接啟動')
+    } else {
+      alert('您的瀏覽器或裝置不支援陀螺儀感測器。')
+    }
+  }
 }
 
 // 自動從 MapLibre 實例提取所有圖層並分類
@@ -196,7 +254,7 @@ const updateLayerWidth = (layer) => {
   }
 }
 
-// 捕捉 MapLibre 實例並萃取圖層
+// 捕捉 MapLibre 實例並萃取圖層與確保 OSP 在最頂層
 const captureMapInstance = (layer) => {
   const findMaplibreInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
@@ -218,23 +276,22 @@ const captureMapInstance = (layer) => {
       realMlMap = instance
       window.mlMap = realMlMap
       console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
+
+      // 強制將 OSP 移至最頂層
+      try {
+        if (realMlMap.getLayer('osp-mark-line-layer')) {
+          realMlMap.moveLayer('osp-mark-line-layer')
+        }
+      } catch (e) {
+        console.warn('移動圖層失敗:', e)
+      }
+
       extractAndGroupLayers()
     } else {
       setTimeout(checkInstance, 100)
     }
   }
   checkInstance()
-
-  // 確保 OSP 圖層永遠在最頂層渲染
-  try {
-    if (realMlMap.getLayer('osp-mark-line-layer')) {
-      realMlMap.moveLayer('osp-mark-line-layer')
-      console.log('🔝 已將 osp-mark-line-layer 移動到最頂層')
-    }
-  } catch (e) {
-    console.warn('移動圖層失敗:', e)
-  }
-
 }
 
 // 切換 Debug Mode
@@ -356,7 +413,7 @@ onMounted(async () => {
         if (mapStyleDebug.layers) {
           const hasOsp = mapStyleDebug.layers.some(l => l.id === 'osp-mark-line-layer')
           if (!hasOsp) {
-            mapStyleDebug.layers.push({
+            mapStyleDebug.layers.unshift({
               id: 'osp-mark-line-layer',
               type: 'line',
               source: vKey,
@@ -364,11 +421,10 @@ onMounted(async () => {
               minzoom: 0,
               maxzoom: 24,
               paint: {
-                'line-color': '#d3d3d3', // 恢復為預設淺灰色
-                'line-width': 2        // 恢復為 3px
+                'line-color': '#d3d3d3',
+                'line-width': 3
               }
             })
-            console.log(`✨ [Debug Style] 成功在記憶體中原生注入 OSP 圖層至 source [${vKey}]`)
           }
         }
       }
@@ -443,6 +499,11 @@ onMounted(async () => {
     captureMapInstance(glLayerNormal)
   }
 })
+
+// 組件卸載時自動清理監聽器，避免記憶體洩漏
+onUnmounted(() => {
+  window.removeEventListener('deviceorientation', handleDeviceOrientation)
+})
 </script>
 
 <style scoped>
@@ -488,6 +549,21 @@ onMounted(async () => {
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
+}
+.gyro-btn {
+  background: #f1f2f6;
+  border: 1px solid #dcdde1;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #2f3640;
+  font-weight: bold;
+}
+.gyro-btn.active {
+  background: #2ed573;
+  color: white;
+  border-color: #26af5f;
 }
 .search-row {
   margin-top: 4px;
@@ -539,6 +615,7 @@ onMounted(async () => {
   background: #ced6e0;
 }
 .layer-item-row {
+  data-v-inspector: ...;
   display: flex;
   align-items: center;
   justify-content: space-between;
