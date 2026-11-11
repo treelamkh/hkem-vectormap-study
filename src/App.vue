@@ -32,6 +32,20 @@
               {{ isGyroActive ? '已開啟 (ON)' : '已關閉 (OFF)' }}
             </button>
           </div>
+
+          <!-- 自訂 GeoJSON 獨立控制專區 -->
+          <div class="custom-layers-section">
+            <div class="section-title">📍 3DPN 點圖層控制</div>
+            <div class="info-row custom-layer-row">
+              <span class="layer-label">Leaflet 點圖層</span>
+              <input type="checkbox" v-model="leafletGeoJsonVisible" @change="toggleLeafletGeoJson" />
+            </div>
+            <div class="info-row custom-layer-row">
+              <span class="layer-label">MapLibre 點圖層</span>
+              <input type="checkbox" v-model="maplibreGeoJsonVisible" @change="toggleMaplibreGeoJson" />
+            </div>
+          </div>
+
           <!-- 快速搜尋框 -->
           <div class="search-row">
             <input 
@@ -96,6 +110,10 @@ const searchKeyword = ref('')
 const isGyroActive = ref(false)
 const isPanelMinimized = ref(false)
 
+// 自訂 GeoJSON 圖層開關狀態
+const leafletGeoJsonVisible = ref(true)
+const maplibreGeoJsonVisible = ref(true)
+
 // 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
 const collapsedGroups = reactive({})
 
@@ -104,6 +122,9 @@ let realMlMap = null
 let glLayerNormal = null
 let glLayerDebug = null
 let currentActiveLayer = null
+
+// Leaflet 獨立 GeoJSON Layer 實例
+let leafletGeoJsonLayer = null
 
 // OSP 圖層的控制狀態
 const ospConfig = reactive({
@@ -142,6 +163,101 @@ const toggleGroupCollapse = (zoomLevel) => {
 // 切換整個控制面板的最小化/展開
 const togglePanelMinimize = () => {
   isPanelMinimized.value = !isPanelMinimized.value
+}
+
+// 1. 控制 Leaflet GeoJSON Layer 顯隱
+const toggleLeafletGeoJson = () => {
+  if (!mapInstance || !leafletGeoJsonLayer) return
+  if (leafletGeoJsonVisible.value) {
+    leafletGeoJsonLayer.addTo(mapInstance)
+    leafletGeoJsonLayer.bringToFront()
+  } else {
+    mapInstance.removeLayer(leafletGeoJsonLayer)
+  }
+}
+
+// 2. 控制 MapLibre GeoJSON Layer 顯隱
+const toggleMaplibreGeoJson = () => {
+  if (!realMlMap) return
+  const layerId = 'custom-3dpn-maplibre-layer'
+  if (realMlMap.getLayer(layerId)) {
+    const visibility = maplibreGeoJsonVisible.value ? 'visible' : 'none'
+    realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
+  }
+}
+
+// 載入並初始化自訂 GeoJSON 資料
+const initCustomGeoJsonLayers = async (map, mlMap) => {
+  try {
+    const basePath = import.meta.env.BASE_URL || '/'
+    const res = await fetch(`${basePath}3DPN_midpt_WGS84.geojson`)
+    const geoJsonData = await res.json()
+
+    const L = window.L
+
+    // A. 加入 Leaflet 獨立圖層 (預設加入並置頂)
+    if (leafletGeoJsonLayer && map.hasLayer(leafletGeoJsonLayer)) {
+      map.removeLayer(leafletGeoJsonLayer)
+    }
+    leafletGeoJsonLayer = L.geoJSON(geoJsonData, {
+      pointToLayer: (feature, latlng) => {
+        return L.circleMarker(latlng, {
+          radius: 6,
+          fillColor: '#ff7675',
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.9
+        })
+      },
+      onEachFeature: (feature, layer) => {
+        if (feature.properties && feature.properties.name) {
+          layer.bindPopup(`<b>3DPN Point</b><br>${feature.properties.name}`)
+        }
+      }
+    })
+    
+    if (leafletGeoJsonVisible.value) {
+      leafletGeoJsonLayer.addTo(map)
+      leafletGeoJsonLayer.bringToFront()
+    }
+
+    // B. 加入 MapLibre 獨立 Source 與 Layer
+    const sourceId = 'custom-3dpn-source'
+    const layerId = 'custom-3dpn-maplibre-layer'
+
+    if (mlMap.getSource(sourceId)) {
+      mlMap.getSource(sourceId).setData(geoJsonData)
+    } else {
+      mlMap.addSource(sourceId, {
+        type: 'geojson',
+        data: geoJsonData
+      })
+    }
+
+    if (!mlMap.getLayer(layerId)) {
+      mlMap.addLayer({
+        id: layerId,
+        type: 'circle',
+        source: sourceId,
+        minzoom: 0,
+        maxzoom: 24,
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#0984e3',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#ffffff'
+        }
+      })
+    }
+
+    // 確保置頂
+    mlMap.moveLayer(layerId)
+    console.log('✨ [GeoJson] 成功載入 3DPN_midpt_WGS84.geojson 點圖層！')
+
+  } catch (err) {
+    console.error('❌ [GeoJson] 載入失敗:', err)
+  }
 }
 
 // 處理手機陀螺儀事件回調
@@ -287,16 +403,21 @@ const captureMapInstance = (layer) => {
       window.mlMap = realMlMap
       console.log('🎉 [Debug] 成功捕捉到 MapLibre 核心實例！')
 
-      // 確保 OSP 圖層永遠在最頂層渲染
+      // 確保 OSP 與 MapLibre 點圖層永遠在最頂層渲染
       try {
         if (realMlMap.getLayer('osp-mark-line-layer')) {
           realMlMap.moveLayer('osp-mark-line-layer')
           console.log('🔝 已將 osp-mark-line-layer 移動到最頂層')
         }
+        if (realMlMap.getLayer('custom-3dpn-maplibre-layer')) {
+          realMlMap.moveLayer('custom-3dpn-maplibre-layer')
+        }
       } catch (e) {
         console.warn('移動圖層失敗:', e)
       }
 
+      // 初始化載入自訂 GeoJSON 雙圖層
+      initCustomGeoJsonLayers(mapInstance, realMlMap)
       extractAndGroupLayers()
     } else {
       setTimeout(checkInstance, 100)
@@ -602,6 +723,27 @@ onUnmounted(() => {
   background: #2ed573;
   color: white;
   border-color: #26af5f;
+}
+.custom-layers-section {
+  background: #f1f2f6;
+  padding: 8px;
+  border-radius: 6px;
+  margin-top: 4px;
+  border: 1px solid #dfe4ea;
+}
+.section-title {
+  font-size: 11px;
+  color: #2c3e50;
+  margin-bottom: 4px;
+  font-weight: bold;
+}
+.custom-layer-row {
+  font-size: 11px;
+  font-weight: normal;
+  margin-top: 2px;
+}
+.layer-label {
+  color: #333;
 }
 .search-row {
   margin-top: 4px;
