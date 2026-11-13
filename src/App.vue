@@ -8,23 +8,36 @@
       <div class="panel-header">
         <div class="panel-title-row">
           <span class="panel-main-title">🗺️ 圖層與控制台</span>
+          <button class="export-btn" @click="exportLayersToExcel">📊 匯出 lyrList </button>
           <button class="minimize-btn" @click="togglePanelMinimize">
             {{ isPanelMinimized ? '展開 ＋' : '最小化 －' }}
           </button>
         </div>
 
         <div v-show="!isPanelMinimized">
+          <!-- Debug 本地 PBF Checkbox -->
+          <div class="info-row checkbox-row">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="isDebugModeY" @change="switchMapSource" />
+              <span>🛠️ Debug (使用本地 PBF)</span>
+            </label>
+          </div>
+
+          <!-- 線上地圖選擇 Dropdown (當 Debug 未勾選時啟用) -->
+          <div class="info-row" v-if="!isDebugModeY">
+            <label>線上地圖來源:</label>
+            <select v-model="onlineMapType" @change="switchMapSource">
+              <option value="LandsD">LandsD (地政總署)</option>
+              <option value="HKeM">HKeM (自訂 JSON Style)</option>
+            </select>
+          </div>
+
+          <!-- 當前 Zoom -->
           <div class="info-row">
             <label>當前 Zoom:</label>
             <span class="zoom-badge">{{ currentZoom }}</span>
           </div>
-          <div class="info-row">
-            <label>Debug Mode:</label>
-            <select v-model="debugMode" @change="switchDebugMode">
-              <option value="N">N (線上 API)</option>
-              <option value="Y">Y (本地 tiles pbf)</option>
-            </select>
-          </div>
+
           <!-- 手機陀螺儀旋轉開關 -->
           <div class="info-row">
             <label>陀螺儀旋轉:</label>
@@ -39,15 +52,6 @@
             <div class="info-row custom-layer-row">
               <span class="layer-label">Leaflet 點圖層</span>
               <input type="checkbox" v-model="leafletGeoJsonVisible" @change="toggleLeafletGeoJson" />
-            </div>
-            <div class="info-row custom-layer-row">
-              <span class="layer-label">MapLibre 點圖層</span>
-              <input type="checkbox" v-model="maplibreGeoJsonVisible" @change="toggleMaplibreGeoJson" />
-            </div>
-            <!-- 控制 tlamp20.png Icon 大小 -->
-            <div class="info-row custom-layer-row slider-row">
-              <span class="layer-label">紅綠燈大小: {{ tlampIconSize }}x</span>
-              <input type="range" min="0.1" max="1.5" step="0.05" v-model.number="tlampIconSize" @input="updateTlampIconSize" />
             </div>
             <!-- 控制 Map Label 文字大小 -->
             <div class="info-row custom-layer-row slider-row">
@@ -112,20 +116,22 @@
 
 <script setup>
 import { onMounted, onUnmounted, reactive, ref, computed } from 'vue'
+import * as XLSX from 'xlsx'
 
 const currentZoom = ref(11)
 const mapContainer = ref(null)
-const debugMode = ref('N')
+
+const isDebugModeY = ref(false)       // Checkbox: 是否使用本地 PBF
+const onlineMapType = ref('LandsD')   // Dropdown: 線上地圖選項 ('LandsD' 或 'HKeM')
+
 const searchKeyword = ref('')
 const isGyroActive = ref(false)
 const isPanelMinimized = ref(false)
 
-// 預設關閉兩個 3DPN 點圖層
+// 預設關閉 Leaflet 點圖層
 const leafletGeoJsonVisible = ref(false)
-const maplibreGeoJsonVisible = ref(false)
 
 // 調整大小的響應式變數
-const tlampIconSize = ref(0.35)
 const labelTextSize = ref(12)
 
 // 記錄每個 Zoom 群組的收合狀態 (false 代表展開，true 代表收起)
@@ -133,19 +139,15 @@ const collapsedGroups = reactive({})
 
 let mapInstance = null
 let realMlMap = null
-let glLayerNormal = null
+
+// 儲存三種不同的 MapLibre 圖層實例
+let glLayerLandsD = null
+let glLayerHkem = null
 let glLayerDebug = null
 let currentActiveLayer = null
 
 // Leaflet 獨立 GeoJSON Layer 實例
 let leafletGeoJsonLayer = null
-
-// OSP 圖層的控制狀態
-const ospConfig = reactive({
-  visible: true,
-  color: '#d3d3d3',
-  width: 2
-})
 
 // 儲存按 Zoom Level 分類的動態圖層清單
 const dynamicLayersByZoom = ref({})
@@ -187,25 +189,6 @@ const toggleLeafletGeoJson = () => {
     leafletGeoJsonLayer.bringToFront()
   } else {
     mapInstance.removeLayer(leafletGeoJsonLayer)
-  }
-}
-
-// 2. 控制 MapLibre GeoJSON Layer 顯隱
-const toggleMaplibreGeoJson = () => {
-  if (!realMlMap) return
-  const layerId = 'custom-3dpn-maplibre-layer'
-  if (realMlMap.getLayer(layerId)) {
-    const visibility = maplibreGeoJsonVisible.value ? 'visible' : 'none'
-    realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
-  }
-}
-
-// 3. 即時調整 tlamp20.png Icon 大小
-const updateTlampIconSize = () => {
-  if (!realMlMap) return
-  const layerId = 'pedestrian-point-tlamp-layer'
-  if (realMlMap.getLayer(layerId)) {
-    realMlMap.setLayoutProperty(layerId, 'icon-size', tlampIconSize.value)
   }
 }
 
@@ -261,38 +244,6 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
       leafletGeoJsonLayer.bringToFront()
     }
 
-    const sourceId = 'custom-3dpn-source'
-    const layerId = 'custom-3dpn-maplibre-layer'
-
-    if (mlMap.getSource(sourceId)) {
-      mlMap.getSource(sourceId).setData(geoJsonData)
-    } else {
-      mlMap.addSource(sourceId, {
-        type: 'geojson',
-        data: geoJsonData
-      })
-    }
-
-    if (!mlMap.getLayer(layerId)) {
-      mlMap.addLayer({
-        id: layerId,
-        type: 'circle',
-        source: sourceId,
-        minzoom: 0,
-        maxzoom: 24,
-        layout: {
-          visibility: maplibreGeoJsonVisible.value ? 'visible' : 'none'
-        },
-        paint: {
-          'circle-radius': 5,
-          'circle-color': '#0984e3',
-          'circle-stroke-width': 1.5,
-          'circle-stroke-color': '#ffffff'
-        }
-      })
-    }
-
-    mlMap.moveLayer(layerId)
     console.log('✨ [GeoJson] 成功載入 3DPN 點圖層！')
 
   } catch (err) {
@@ -300,24 +251,32 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
   }
 }
 
-// 載入與註冊 tlamp20.png 圖示至 MapLibre 核心
+// 批次載入與註冊 tlamp20、walk30、tlift40 圖示至 MapLibre 核心
 const setupCustomIcons = (mlMap) => {
   if (!mlMap) return
   const basePath = import.meta.env.BASE_URL || '/'
-  const iconUrl = `${window.location.origin}${basePath}tlamp20.png`
+  
+  const icons = [
+    { name: 'tlamp20', filename: 'tlamp20.png' },
+    { name: 'walk30', filename: 'walk30.png' },
+    { name: 'tlift40', filename: 'tlift40.png' }
+  ]
 
-  if (!mlMap.hasImage('tlamp20-icon')) {
-    mlMap.loadImage(iconUrl, (error, image) => {
-      if (error) {
-        console.error('❌ [Icon Load] 載入 tlamp20.png 失敗:', error)
-        return
-      }
-      if (!mlMap.hasImage('tlamp20-icon')) {
-        mlMap.addImage('tlamp20-icon', image)
-        console.log('🚦 [Icon Load] 成功註冊 tlamp20-icon (PNG) 至 MapLibre！')
-      }
-    })
-  }
+  icons.forEach(icon => {
+    const iconUrl = `${window.location.origin}${basePath}${icon.filename}`
+    if (!mlMap.hasImage(icon.name)) {
+      mlMap.loadImage(iconUrl, (error, image) => {
+        if (error) {
+          console.error(`❌ [Icon Load] 載入 ${icon.filename} 失敗:`, error)
+          return
+        }
+        if (!mlMap.hasImage(icon.name)) {
+          mlMap.addImage(icon.name, image)
+          console.log(`🚦 [Icon Load] 成功註冊 ${icon.name} 至 MapLibre！`)
+        }
+      })
+    }
+  })
 }
 
 // 處理手機陀螺儀事件回調
@@ -460,18 +419,16 @@ const captureMapInstance = (layer) => {
 
       setupCustomIcons(realMlMap)
 
+      // 確保將 maplibre-root.json 內的圖層移到頂層渲染
       try {
-        if (realMlMap.getLayer('td-polygon-layer')) {
-          realMlMap.moveLayer('td-polygon-layer')
+        if (realMlMap.getLayer('PPISLAMP')) {
+          realMlMap.moveLayer('PPISLAMP')
         }
-        if (realMlMap.getLayer('osp-mark-line-layer')) {
-          realMlMap.moveLayer('osp-mark-line-layer')
+        if (realMlMap.getLayer('PPISWALK')) {
+          realMlMap.moveLayer('PPISWALK')
         }
-        if (realMlMap.getLayer('pedestrian-point-tlamp-layer')) {
-          realMlMap.moveLayer('pedestrian-point-tlamp-layer')
-        }
-        if (realMlMap.getLayer('custom-3dpn-maplibre-layer')) {
-          realMlMap.moveLayer('custom-3dpn-maplibre-layer')
+        if (realMlMap.getLayer('PPISLIFT')) {
+          realMlMap.moveLayer('PPISLIFT')
         }
       } catch (e) {
         console.warn('移動圖層失敗:', e)
@@ -486,25 +443,36 @@ const captureMapInstance = (layer) => {
   checkInstance()
 }
 
-// 切換 Debug Mode
-const switchDebugMode = () => {
+// 統一的地圖來源切換函式
+const switchMapSource = () => {
   if (!mapInstance) return
 
   if (currentActiveLayer && mapInstance.hasLayer(currentActiveLayer)) {
     mapInstance.removeLayer(currentActiveLayer)
   }
 
-  if (debugMode.value === 'Y') {
+  if (isDebugModeY.value) {
+    console.log('🛠️ [Map Switch] 切換至 Debug 模式 (本地 tiles pbf)')
     if (glLayerDebug) {
       glLayerDebug.addTo(mapInstance)
       currentActiveLayer = glLayerDebug
       captureMapInstance(glLayerDebug)
     }
   } else {
-    if (glLayerNormal) {
-      glLayerNormal.addTo(mapInstance)
-      currentActiveLayer = glLayerNormal
-      captureMapInstance(glLayerNormal)
+    if (onlineMapType.value === 'HKeM') {
+      console.log('🌐 [Map Switch] 切換至線上 HKeM (讀取 public/config/maplibre-root.json)')
+      if (glLayerHkem) {
+        glLayerHkem.addTo(mapInstance)
+        currentActiveLayer = glLayerHkem
+        captureMapInstance(glLayerHkem)
+      }
+    } else {
+      console.log('🌐 [Map Switch] 切換至線上 LandsD Map API')
+      if (glLayerLandsD) {
+        glLayerLandsD.addTo(mapInstance)
+        currentActiveLayer = glLayerLandsD
+        captureMapInstance(glLayerLandsD)
+      }
     }
   }
 
@@ -514,6 +482,75 @@ const switchDebugMode = () => {
       extractAndGroupLayers()
     }
   }, 300)
+}
+
+const exportLayersToExcel = () => {
+  if (!realMlMap) {
+    alert('地圖尚未載入完成！')
+    return
+  }
+
+  const style = realMlMap.getStyle()
+  if (!style || !style.layers) return
+
+  // 1. 準備「Layer 完整清單 & Paint 設定」工作表資料
+  const layerDetails = style.layers.map((layer, index) => {
+    const minZ = layer.minzoom !== undefined ? layer.minzoom : 0
+    const maxZ = layer.maxzoom !== undefined ? layer.maxzoom : 24
+
+    // 計算 Zoom 8 - 20 各自嘅可見狀態 (O = 顯示, - = 隱藏)
+    const zoomMatrix = {}
+    for (let z = 8; z <= 20; z++) {
+      zoomMatrix[`Z${z}`] = (z >= minZ && z <= maxZ) ? 'O' : '-'
+    }
+
+    return {
+      'Render Order': index + 1,
+      'Layer ID': layer.id,
+      'Data Type': layer.type,
+      'Source': layer.source || '-',
+      'Source Layer': layer['source-layer'] || '-',
+      'Min Zoom': minZ,
+      'Max Zoom': maxZ,
+      ...zoomMatrix, // 展開 Z8 ~ Z20 矩陣
+      'Filtering': layer.filter ? JSON.stringify(layer.filter) : '-',
+      'Paint': layer.paint ? JSON.stringify(layer.paint) : '{}',
+      'Layout': layer.layout ? JSON.stringify(layer.layout) : '{}'
+    }
+  })
+
+  // 2. 準備「按 Zoom Level (8-20) 分組總覽」工作表資料
+  const zoomSummary = []
+  for (let z = 8; z <= 20; z++) {
+    const activeLayers = style.layers.filter(l => {
+      const minZ = l.minzoom !== undefined ? l.minzoom : 0
+      const maxZ = l.maxzoom !== undefined ? l.maxzoom : 24
+      return z >= minZ && z <= maxZ
+    })
+
+    activeLayers.forEach(l => {
+      zoomSummary.push({
+        'Zoom Level': z,
+        'Layer ID': l.id,
+        'Data Type': l.type,
+        'Source Layer': l['source-layer'] || '-',
+        'Paint': l.paint ? JSON.stringify(l.paint) : '{}'
+      })
+    })
+  }
+
+  // 3. 建立 Excel Workbook 並寫入兩個分頁 (Sheets)
+  const wb = XLSX.utils.book_new()
+  
+  const wsDetails = XLSX.utils.json_to_sheet(layerDetails)
+  const wsZoomSummary = XLSX.utils.json_to_sheet(zoomSummary)
+
+  XLSX.utils.book_append_sheet(wb, wsDetails, 'Layer Configurations')
+  XLSX.utils.book_append_sheet(wb, wsZoomSummary, 'Layers in Zoom Levels')
+
+  // 4. 根據當前模式命名並觸發下載
+  const modeName = isDebugModeY.value ? 'Debug_LocalPBF' : onlineMapType.value
+  XLSX.writeFile(wb, `MapLayers_Spec_${modeName}.xlsx`)
 }
 
 onMounted(async () => {
@@ -555,174 +592,130 @@ onMounted(async () => {
     return { url: reqUrl }
   }
 
-  let mapStyleNormal = null
+  let mapStyleLandsD = null
+  let mapStyleHkem = null
   let mapStyleDebug = null
 
-  // 1. 載入線上 Normal Style
+  const basePath = import.meta.env.BASE_URL || '/'
+
+  // 1. 載入 LandsD 原始線上 Style
   try {
     const styleUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/resources/styles/root.json'
     const res = await fetch(styleUrl)
     const textData = await res.text()
     const fixedText = textData.replace(/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
-    mapStyleNormal = JSON.parse(fixedText)
+    mapStyleLandsD = JSON.parse(fixedText)
 
-    if (mapStyleNormal.sources) {
-      Object.keys(mapStyleNormal.sources).forEach(key => {
-        if (mapStyleNormal.sources[key].type === 'vector') {
-          mapStyleNormal.sources[key].maxzoom = 15
-          mapStyleNormal.sources[key].tiles = [
+    if (mapStyleLandsD.sources) {
+      Object.keys(mapStyleLandsD.sources).forEach(key => {
+        if (mapStyleLandsD.sources[key].type === 'vector') {
+          mapStyleLandsD.sources[key].maxzoom = 15
+          mapStyleLandsD.sources[key].tiles = [
             'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/tile/{z}/{y}/{x}.pbf'
           ]
         }
       })
     }
   } catch (err) {
-    console.error('❌ [Debug] Basemap Normal 載入失敗:', err)
+    console.error('❌ [Map Style] LandsD 載入失敗:', err)
   }
 
-  // 2. 建立 Debug Style
+  // 2. 載入新建立的 public/config/maplibre-root.json 作為 HKeM 樣式
   try {
-    if (mapStyleNormal) {
-      mapStyleDebug = JSON.parse(JSON.stringify(mapStyleNormal))
-      const basePath = import.meta.env.BASE_URL || '/'
+    const hkemJsonUrl = `${window.location.origin}${basePath}config/maplibre-root.json`
+    const resHkem = await fetch(hkemJsonUrl)
+    const hkemText = await resHkem.text()
 
+    const fixedHkemText = hkemText.replace(/\.\.\/\.\.\/|\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84/')
+    mapStyleHkem = JSON.parse(fixedHkemText)
+
+    if (mapStyleHkem.sources) {
+      Object.keys(mapStyleHkem.sources).forEach(key => {
+        if (mapStyleHkem.sources[key].type === 'vector') {
+          mapStyleHkem.sources[key].maxzoom = 15
+          mapStyleHkem.sources[key].tiles = [
+            'https://eo-map-rr.hkemobility.gov.hk/map_pbf/COMBINED/{z}/{x}/{y}.pbf'
+          ]
+          delete mapStyleHkem.sources[key].bounds
+        }
+      })
+    }
+  } catch (err) {
+    console.error('❌ [Map Style] 載入 public/config/maplibre-root.json 失敗:', err)
+  }
+
+  // 3. 建立 Debug Style (指向本地 tiles pbf，樣式結構與 HKeM 保持一致)
+  try {
+    if (mapStyleHkem) {
+      mapStyleDebug = JSON.parse(JSON.stringify(mapStyleHkem))
       if (mapStyleDebug.sources) {
         Object.keys(mapStyleDebug.sources).forEach(key => {
           if (mapStyleDebug.sources[key].type === 'vector') {
-            mapStyleDebug.sources[key].maxzoom = 15
             mapStyleDebug.sources[key].tiles = [
               `${window.location.origin}${basePath}tiles/{z}/{x}/{y}.pbf`
             ]
-            delete mapStyleDebug.sources[key].bounds
           }
         })
-
-        const vKey = Object.keys(mapStyleDebug.sources).find(k => mapStyleDebug.sources[k].type === 'vector') || 'esri'
-        
-        if (mapStyleDebug.layers) {
-          // A. 注入 OSP 線圖層 (設定 minzoom: 16)
-          const hasOsp = mapStyleDebug.layers.some(l => l.id === 'osp-mark-line-layer')
-          if (!hasOsp) {
-            mapStyleDebug.layers.push({
-              id: 'osp-mark-line-layer',
-              type: 'line',
-              source: vKey,
-              'source-layer': 'OSP_MARK_LINE',
-              minzoom: 16, // 改為 16 級才顯示
-              maxzoom: 24,
-              paint: {
-                'line-color': '#d3d3d3',
-                'line-width': 2
-              }
-            })
-          }
-
-          // B. 注入 TD_Polygon 面圖層 (維持預設 0 級或依需求)
-          const hasTdPoly = mapStyleDebug.layers.some(l => l.id === 'td-polygon-layer')
-          if (!hasTdPoly) {
-            mapStyleDebug.layers.push({
-              id: 'td-polygon-layer',
-              type: 'fill',
-              source: vKey,
-              'source-layer': 'TD_Polygon',
-              minzoom: 0,
-              maxzoom: 24,
-              paint: {
-                'fill-color': '#ffdf6a',
-                'fill-opacity': 0.6
-              }
-            })
-          }
-
-          // C. 注入 PedestrianPoint 紅綠燈圖層 (設定 minzoom: 16)
-          const hasPedPoint = mapStyleDebug.layers.some(l => l.id === 'pedestrian-point-tlamp-layer')
-          if (!hasPedPoint) {
-            mapStyleDebug.layers.push({
-              id: 'pedestrian-point-tlamp-layer',
-              type: 'symbol',
-              source: vKey,
-              'source-layer': 'PedestrianPoint',
-              filter: ['==', ['get', 'FeatureType'], 30],
-              minzoom: 16, // 改為 16 級才顯示
-              maxzoom: 24,
-              layout: {
-                'icon-image': 'tlamp20-icon',
-                'icon-size': tlampIconSize.value,
-                'icon-allow-overlap': true
-              }
-            })
-          }
-        }
       }
     }
   } catch (err) {
-    console.error('❌ [Debug] 建立 Debug Style 失敗:', err)
+    console.error('❌ [Map Style] Debug 樣式建立失敗:', err)
   }
 
-  // 3. 獨立載入並合併 Label Style 給雙版本
+  // 4. 獨立載入並合併 Label Style 給三種版本
   try {
     const styLabelUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/styles/root.json'
-    const [resLabel1, resLabel2] = await Promise.all([fetch(styLabelUrl), fetch(styLabelUrl)])
+    const [resL1, resL2, resL3] = await Promise.all([fetch(styLabelUrl), fetch(styLabelUrl), fetch(styLabelUrl)])
     
-    const text1 = await resLabel1.text()
-    const text2 = await resLabel2.text()
+    const [t1, t2, t3] = await Promise.all([resL1.text(), resL2.text(), resL3.text()])
+    const fixText = (txt) => txt.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
 
-    const fixed1 = text1.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
-    const fixed2 = text2.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
+    const label1 = JSON.parse(fixText(t1))
+    const label2 = JSON.parse(fixText(t2))
+    const label3 = JSON.parse(fixText(t3))
 
-    const labelStyle1 = JSON.parse(fixed1)
-    const labelStyle2 = JSON.parse(fixed2)
-
-    if (mapStyleNormal) {
-      mapStyleNormal.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
-      const sKey = Object.keys(labelStyle1.sources)[0] || 'esri'
-      const sObj = labelStyle1.sources[sKey]
+    const setupLabels = (mapStyle, labelStyle, labelSourceName) => {
+      if (!mapStyle) return
+      mapStyle.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
+      const sKey = Object.keys(labelStyle.sources)[0] || 'esri'
+      const sObj = labelStyle.sources[sKey]
       if (sObj) {
         sObj.maxzoom = 15
         sObj.tiles = ['https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf']
-        mapStyleNormal.sources['hk_label_norm'] = sObj
-        if (labelStyle1.layers) {
-          labelStyle1.layers.forEach(l => { l.source = 'hk_label_norm' })
+        mapStyle.sources[labelSourceName] = sObj
+        if (labelStyle.layers) {
+          labelStyle.layers.forEach(l => { l.source = labelSourceName })
         }
       }
-      if (labelStyle1.layers) {
-        mapStyleNormal.layers = [...mapStyleNormal.layers, ...labelStyle1.layers]
+      if (labelStyle.layers) {
+        mapStyle.layers = [...mapStyle.layers, ...labelStyle.layers]
       }
     }
 
-    if (mapStyleDebug) {
-      mapStyleDebug.glyphs = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/fonts/{fontstack}/{range}.pbf'
-      const sKey2 = Object.keys(labelStyle2.sources)[0] || 'esri'
-      const sObj2 = labelStyle2.sources[sKey2]
-      if (sObj2) {
-        sObj2.maxzoom = 15
-        sObj2.tiles = ['https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/tile/{z}/{y}/{x}.pbf']
-        mapStyleDebug.sources['hk_label_dbg'] = sObj2
-        if (labelStyle2.layers) {
-          labelStyle2.layers.forEach(l => { l.source = 'hk_label_dbg' })
-        }
-      }
-      if (labelStyle2.layers) {
-        mapStyleDebug.layers = [...mapStyleDebug.layers, ...labelStyle2.layers]
-      }
-    }
+    setupLabels(mapStyleLandsD, label1, 'hk_label_landsd')
+    setupLabels(mapStyleHkem, label2, 'hk_label_hkem')
+    setupLabels(mapStyleDebug, label3, 'hk_label_dbg')
+
   } catch (err) {
-    console.error('❌ [Debug] Label Style 載入失敗:', err)
+    console.error('❌ [Label Style] 載入失敗:', err)
   }
 
-  // 4. 建立圖層實例
-  if (mapStyleNormal) {
-    glLayerNormal = L.maplibreGL({ style: mapStyleNormal, maxZoom: 20, transformRequest: fontTransform })
+  // 5. 建立圖層實例
+  if (mapStyleLandsD) {
+    glLayerLandsD = L.maplibreGL({ style: mapStyleLandsD, maxZoom: 20, transformRequest: fontTransform })
+  }
+  if (mapStyleHkem) {
+    glLayerHkem = L.maplibreGL({ style: mapStyleHkem, maxZoom: 20, transformRequest: fontTransform })
   }
   if (mapStyleDebug) {
     glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform })
   }
 
-  // 預設載入線上版 (N)
-  if (glLayerNormal) {
-    glLayerNormal.addTo(map)
-    currentActiveLayer = glLayerNormal
-    captureMapInstance(glLayerNormal)
+  // 預設載入 LandsD
+  if (glLayerLandsD) {
+    glLayerLandsD.addTo(map)
+    currentActiveLayer = glLayerLandsD
+    captureMapInstance(glLayerLandsD)
   }
 })
 
@@ -794,6 +787,20 @@ onUnmounted(() => {
   justify-content: space-between;
   font-size: 13px;
   font-weight: bold;
+}
+.checkbox-row {
+  justify-content: flex-start;
+  background: #f8f9fa;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #e9ecef;
+}
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: #2c3e50;
 }
 .zoom-badge {
   background: #34495e;
