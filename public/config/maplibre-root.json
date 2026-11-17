@@ -12031,6 +12031,68 @@
         "line-color": "#d3d3d3", 
         "line-width": 2 
       }
+    },
+    {
+      "id": "centerline-line-layer",
+      "type": "line",
+      "source": "esri",
+      "source-layer": "centerline_layer",
+      "minzoom": 14,
+      "maxzoom": 24,
+      "layout": {
+        "line-cap": "round",
+        "line-join": "round",
+        "visibility": "none"
+      },
+      "paint": {
+        "line-width": 3,
+        "line-color": [
+          "match",
+          ["get", "TRAVEL_DIRECTION"],
+          1, "#ffa500",
+          3, "#0084ff",
+          "#8e8e93"
+        ]
+      }
+    },
+    {
+      "id": "centerline-arrow-layer",
+      "type": "symbol",
+      "source": "esri",
+      "source-layer": "centerline_layer",
+      "minzoom": 14,
+      "maxzoom": 24,
+      "layout": {
+        "symbol-placement": "line",
+        "symbol-spacing": 35,
+        "icon-image": [
+          "match",
+          ["get", "TRAVEL_DIRECTION"],
+          1, "arrow_orange",
+          3, "arrow_blue",
+          "arrow_orange"
+        ],
+        "icon-size": 0.35,
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-rotation-alignment": "map",
+        "visibility": "none"
+      }
+    },
+    {
+      "id": "nsr-line-layer",
+      "type": "line",
+      "source": "esri",
+      "source-layer": "nsr_layer",
+      "minzoom": 14,
+      "maxzoom": 24,
+      "layout": {
+        "visibility": "none"
+      },
+      "paint": {
+        "line-width": 2,
+        "line-color": "#2ed573"
+      }
     }
   ]
 }

@@ -8,7 +8,6 @@
       <div class="panel-header">
         <div class="panel-title-row">
           <span class="panel-main-title">🗺️ 圖層與控制台</span>
-          <button class="export-btn" @click="exportLayersToExcel">📊 匯出 lyrList </button>
           <button class="minimize-btn" @click="togglePanelMinimize">
             {{ isPanelMinimized ? '展開 ＋' : '最小化 －' }}
           </button>
@@ -48,9 +47,9 @@
 
           <!-- 自訂 GeoJSON 獨立控制專區 -->
           <div class="custom-layers-section">
-            <div class="section-title">📍 3DPN 點圖層控制</div>
+            <div class="section-title">📍 圖層控制 (GeoJSON)</div>
             <div class="info-row custom-layer-row">
-              <span class="layer-label">Leaflet 點圖層</span>
+              <span class="layer-label">Leaflet 點圖層 (3DPN)</span>
               <input type="checkbox" v-model="leafletGeoJsonVisible" @change="toggleLeafletGeoJson" />
             </div>
             <!-- 控制 Map Label 文字大小 -->
@@ -116,7 +115,6 @@
 
 <script setup>
 import { onMounted, onUnmounted, reactive, ref, computed } from 'vue'
-import * as XLSX from 'xlsx'
 
 const currentZoom = ref(11)
 const mapContainer = ref(null)
@@ -209,7 +207,7 @@ const updateLabelTextSize = () => {
   })
 }
 
-// 載入並初始化自訂 GeoJSON 資料
+// 載入並初始化自訂 Leaflet GeoJSON 資料 (3DPN)
 const initCustomGeoJsonLayers = async (map, mlMap) => {
   try {
     const basePath = import.meta.env.BASE_URL || '/'
@@ -251,11 +249,12 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
   }
 }
 
-// 批次載入與註冊 tlamp20、walk30、tlift40 圖示至 MapLibre 核心
+// 動態產生高畫質、100% 透明背景的箭頭圖標
 const setupCustomIcons = (mlMap) => {
   if (!mlMap) return
   const basePath = import.meta.env.BASE_URL || '/'
   
+  // 1. 保留原本其他 UI icon 載入
   const icons = [
     { name: 'tlamp20', filename: 'tlamp20.png' },
     { name: 'walk30', filename: 'walk30.png' },
@@ -266,17 +265,47 @@ const setupCustomIcons = (mlMap) => {
     const iconUrl = `${window.location.origin}${basePath}${icon.filename}`
     if (!mlMap.hasImage(icon.name)) {
       mlMap.loadImage(iconUrl, (error, image) => {
-        if (error) {
-          console.error(`❌ [Icon Load] 載入 ${icon.filename} 失敗:`, error)
-          return
-        }
-        if (!mlMap.hasImage(icon.name)) {
+        if (!error && !mlMap.hasImage(icon.name)) {
           mlMap.addImage(icon.name, image)
-          console.log(`🚦 [Icon Load] 成功註冊 ${icon.name} 至 MapLibre！`)
         }
       })
     }
   })
+
+  // 2. 用程式碼動態繪製完美透明背景的箭頭 (取代有格子底的 PNG)
+  const createArrowImage = (color) => {
+    const size = 48
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    
+    // 確保完全透明背景
+    ctx.clearRect(0, 0, size, size)
+    
+    // 繪製箭頭形狀
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.moveTo(8, 6)
+    ctx.lineTo(40, 24)
+    ctx.lineTo(8, 42)
+    ctx.closePath()
+    ctx.fill()
+
+    return {
+      width: size,
+      height: size,
+      data: ctx.getImageData(0, 0, size, size).data
+    }
+  }
+
+  if (!mlMap.hasImage('arrow_orange')) {
+    mlMap.addImage('arrow_orange', createArrowImage('#ffa500'))
+  }
+  if (!mlMap.hasImage('arrow_blue')) {
+    mlMap.addImage('arrow_blue', createArrowImage('#0084ff'))
+  }
+  console.log('✨ [Icons] 成功動態註冊內建高畫質透明箭頭！')
 }
 
 // 處理手機陀螺儀事件回調
@@ -419,7 +448,7 @@ const captureMapInstance = (layer) => {
 
       setupCustomIcons(realMlMap)
 
-      // 確保將 maplibre-root.json 內的圖層移到頂層渲染
+      // 確保將特定圖層移到頂層渲染
       try {
         if (realMlMap.getLayer('PPISLAMP')) {
           realMlMap.moveLayer('PPISLAMP')
@@ -429,6 +458,9 @@ const captureMapInstance = (layer) => {
         }
         if (realMlMap.getLayer('PPISLIFT')) {
           realMlMap.moveLayer('PPISLIFT')
+        }
+        if (realMlMap.getLayer('centerline-line-layer')) {
+          realMlMap.moveLayer('centerline-line-layer')
         }
       } catch (e) {
         console.warn('移動圖層失敗:', e)
@@ -482,75 +514,6 @@ const switchMapSource = () => {
       extractAndGroupLayers()
     }
   }, 300)
-}
-
-const exportLayersToExcel = () => {
-  if (!realMlMap) {
-    alert('地圖尚未載入完成！')
-    return
-  }
-
-  const style = realMlMap.getStyle()
-  if (!style || !style.layers) return
-
-  // 1. 準備「Layer 完整清單 & Paint 設定」工作表資料
-  const layerDetails = style.layers.map((layer, index) => {
-    const minZ = layer.minzoom !== undefined ? layer.minzoom : 0
-    const maxZ = layer.maxzoom !== undefined ? layer.maxzoom : 24
-
-    // 計算 Zoom 8 - 20 各自嘅可見狀態 (O = 顯示, - = 隱藏)
-    const zoomMatrix = {}
-    for (let z = 8; z <= 20; z++) {
-      zoomMatrix[`Z${z}`] = (z >= minZ && z <= maxZ) ? 'O' : '-'
-    }
-
-    return {
-      'Render Order': index + 1,
-      'Layer ID': layer.id,
-      'Data Type': layer.type,
-      'Source': layer.source || '-',
-      'Source Layer': layer['source-layer'] || '-',
-      'Min Zoom': minZ,
-      'Max Zoom': maxZ,
-      ...zoomMatrix, // 展開 Z8 ~ Z20 矩陣
-      'Filtering': layer.filter ? JSON.stringify(layer.filter) : '-',
-      'Paint': layer.paint ? JSON.stringify(layer.paint) : '{}',
-      'Layout': layer.layout ? JSON.stringify(layer.layout) : '{}'
-    }
-  })
-
-  // 2. 準備「按 Zoom Level (8-20) 分組總覽」工作表資料
-  const zoomSummary = []
-  for (let z = 8; z <= 20; z++) {
-    const activeLayers = style.layers.filter(l => {
-      const minZ = l.minzoom !== undefined ? l.minzoom : 0
-      const maxZ = l.maxzoom !== undefined ? l.maxzoom : 24
-      return z >= minZ && z <= maxZ
-    })
-
-    activeLayers.forEach(l => {
-      zoomSummary.push({
-        'Zoom Level': z,
-        'Layer ID': l.id,
-        'Data Type': l.type,
-        'Source Layer': l['source-layer'] || '-',
-        'Paint': l.paint ? JSON.stringify(l.paint) : '{}'
-      })
-    })
-  }
-
-  // 3. 建立 Excel Workbook 並寫入兩個分頁 (Sheets)
-  const wb = XLSX.utils.book_new()
-  
-  const wsDetails = XLSX.utils.json_to_sheet(layerDetails)
-  const wsZoomSummary = XLSX.utils.json_to_sheet(zoomSummary)
-
-  XLSX.utils.book_append_sheet(wb, wsDetails, 'Layer Configurations')
-  XLSX.utils.book_append_sheet(wb, wsZoomSummary, 'Layers in Zoom Levels')
-
-  // 4. 根據當前模式命名並觸發下載
-  const modeName = isDebugModeY.value ? 'Debug_LocalPBF' : onlineMapType.value
-  XLSX.writeFile(wb, `MapLayers_Spec_${modeName}.xlsx`)
 }
 
 onMounted(async () => {
@@ -620,7 +583,7 @@ onMounted(async () => {
     console.error('❌ [Map Style] LandsD 載入失敗:', err)
   }
 
-  // 2. 載入新建立的 public/config/maplibre-root.json 作為 HKeM 樣式
+  // 2. 載入 public/config/maplibre-root.json 作為 HKeM 樣式
   try {
     const hkemJsonUrl = `${window.location.origin}${basePath}config/maplibre-root.json`
     const resHkem = await fetch(hkemJsonUrl)
@@ -644,7 +607,7 @@ onMounted(async () => {
     console.error('❌ [Map Style] 載入 public/config/maplibre-root.json 失敗:', err)
   }
 
-  // 3. 建立 Debug Style (指向本地 tiles pbf，樣式結構與 HKeM 保持一致)
+  // 3. 建立 Debug Style (指向本地 tiles pbf)
   try {
     if (mapStyleHkem) {
       mapStyleDebug = JSON.parse(JSON.stringify(mapStyleHkem))
