@@ -46,11 +46,21 @@
           </div>
 
           <!-- 自訂 GeoJSON 獨立控制專區 -->
+          <!-- 自訂 GeoJSON 獨立控制專區 -->
           <div class="custom-layers-section">
             <div class="section-title">📍 圖層控制 (GeoJSON)</div>
             <div class="info-row custom-layer-row">
-              <span class="layer-label">Leaflet 點圖層 (3DPN)</span>
+              <span class="layer-label">Leaflet 點圖層</span>
               <input type="checkbox" v-model="leafletGeoJsonVisible" @change="toggleLeafletGeoJson" />
+            </div>
+            <div class="info-row custom-layer-row">
+              <span class="layer-label">MapLibre 點圖層</span>
+              <input type="checkbox" v-model="maplibreGeoJsonVisible" @change="toggleMaplibreGeoJson" />
+            </div>
+            <!-- 🟢 新增 TrafficSpeed 獨立圖層開關 -->
+            <div class="info-row custom-layer-row">
+              <span class="layer-label">TrafficSpeed 獨立圖層</span>
+              <input type="checkbox" v-model="trafficSpeedVisible" @change="toggleTrafficSpeedLayer" />
             </div>
             <!-- 控制 Map Label 文字大小 -->
             <div class="info-row custom-layer-row slider-row">
@@ -128,6 +138,7 @@ const isPanelMinimized = ref(false)
 
 // 預設關閉 Leaflet 點圖層
 const leafletGeoJsonVisible = ref(false)
+const maplibreGeoJsonVisible = ref(false)
 
 // 調整大小的響應式變數
 const labelTextSize = ref(12)
@@ -190,6 +201,25 @@ const toggleLeafletGeoJson = () => {
   }
 }
 
+// 2. 控制 MapLibre GeoJSON Layer 顯隱
+const toggleMaplibreGeoJson = () => {
+  if (!realMlMap) return
+  const layerId = 'custom-3dpn-maplibre-layer'
+  if (realMlMap.getLayer(layerId)) {
+    const visibility = maplibreGeoJsonVisible.value ? 'visible' : 'none'
+    realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
+  }
+}
+
+// 3. 即時調整 tlamp20.png Icon 大小
+const updateTlampIconSize = () => {
+  if (!realMlMap) return
+  const layerId = 'PPISLAMP'
+  if (realMlMap.getLayer(layerId)) {
+    realMlMap.setLayoutProperty(layerId, 'icon-size', tlampIconSize.value)
+  }
+}
+
 // 4. 即時調整 Map Label 字體大小
 const updateLabelTextSize = () => {
   if (!realMlMap) return
@@ -242,6 +272,39 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
       leafletGeoJsonLayer.bringToFront()
     }
 
+    const sourceId = 'custom-3dpn-source'
+    const layerId = 'custom-3dpn-maplibre-layer'
+
+    if (mlMap.getSource(sourceId)) {
+      mlMap.getSource(sourceId).setData(geoJsonData)
+    } else {
+      mlMap.addSource(sourceId, {
+        type: 'geojson',
+        data: geoJsonData
+      })
+    }
+
+    if (!mlMap.getLayer(layerId)) {
+      mlMap.addLayer({
+        id: layerId,
+        type: 'circle',
+        source: sourceId,
+        minzoom: 0,
+        maxzoom: 24,
+        layout: {
+          visibility: maplibreGeoJsonVisible.value ? 'visible' : 'none'
+        },
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#0984e3',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#ffffff'
+        }
+      })
+    }
+
+    mlMap.moveLayer(layerId)
+
     console.log('✨ [GeoJson] 成功載入 3DPN 點圖層！')
 
   } catch (err) {
@@ -272,7 +335,7 @@ const setupCustomIcons = (mlMap) => {
     }
   })
 
-  // 2. 用程式碼動態繪製完美透明背景的箭頭 (取代有格子底的 PNG)
+  // 2. 用程式碼動態繪製箭頭
   const createArrowImage = (color) => {
     const size = 48
     const canvas = document.createElement('canvas')
@@ -426,7 +489,10 @@ const updateLayerWidth = (layer) => {
 
 // 捕捉 MapLibre 實例並進行頂層層級排列
 const captureMapInstance = (layer) => {
-  const findMaplibreInstance = () => {
+  if (!layer) return
+
+  // 內部直接定義查找函式，避免 ReferenceError
+  const findInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
       return layer.getMaplibreMap()
     }
@@ -441,14 +507,13 @@ const captureMapInstance = (layer) => {
   }
 
   const checkInstance = () => {
-    const instance = findMaplibreInstance()
+    const instance = findInstance()
     if (instance) {
       realMlMap = instance
       window.mlMap = realMlMap
 
       setupCustomIcons(realMlMap)
 
-      // 確保將特定圖層移到頂層渲染
       try {
         if (realMlMap.getLayer('PPISLAMP')) {
           realMlMap.moveLayer('PPISLAMP')
@@ -467,6 +532,7 @@ const captureMapInstance = (layer) => {
       }
 
       initCustomGeoJsonLayers(mapInstance, realMlMap)
+      initTrafficSpeedGeoJson(realMlMap)
       extractAndGroupLayers()
     } else {
       setTimeout(checkInstance, 100)
@@ -514,6 +580,104 @@ const switchMapSource = () => {
       extractAndGroupLayers()
     }
   }, 300)
+}
+
+// TrafficSpeed 獨立圖層開關（預設開啟）
+const trafficSpeedVisible = ref(true)
+
+// 控制 TrafficSpeed 獨立圖層顯隱
+const toggleTrafficSpeedLayer = () => {
+  if (!realMlMap) return
+  const layerId = 'traffic-speed-line-layer'
+  if (realMlMap.getLayer(layerId)) {
+    const visibility = trafficSpeedVisible.value ? 'visible' : 'none'
+    realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
+  }
+}
+
+// 載入並初始化 trafficspeed.geojson (支援底線與動態箭頭)
+const initTrafficSpeedGeoJson = async (mlMap) => {
+  if (!mlMap) return
+  try {
+    const basePath = import.meta.env.BASE_URL || '/'
+    const res = await fetch(`${basePath}trafficspeed.geojson`)
+    const geoJsonData = await res.json()
+
+    const sourceId = 'traffic-speed-source'
+    const lineLayerId = 'traffic-speed-line-layer'
+    const arrowLayerId = 'traffic-speed-arrow-layer'
+
+    if (mlMap.getSource(sourceId)) {
+      mlMap.getSource(sourceId).setData(geoJsonData)
+    } else {
+      mlMap.addSource(sourceId, {
+        type: 'geojson',
+        data: geoJsonData
+      })
+    }
+
+    // 1. 新增底線圖層 (根據 ROAD_SATURATION_LEVEL 顯示綠、黃、紅)
+    if (!mlMap.getLayer(lineLayerId)) {
+      mlMap.addLayer({
+        id: lineLayerId,
+        type: 'line',
+        source: sourceId,
+        minzoom: 0,
+        maxzoom: 24,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'visibility': trafficSpeedVisible.value ? 'visible' : 'none'
+        },
+        paint: {
+          'line-width': 4,
+          'line-color': [
+            'match',
+            ['get', 'ROAD_SATURATION_LEVEL'],
+            'TRAFFIC GOOD', '#2ed573',     // 綠色
+            'TRAFFIC AVERAGE', '#ffa500',  // 黃色
+            'TRAFFIC BAD', '#ff4757',      // 紅色
+            '#ced6e0'                      // 預設顏色
+          ]
+        }
+      })
+    }
+
+    // 2. 🟢 新增沿線方向箭頭符號圖層 (套用 createArrowImage 產生的箭頭)
+    if (!mlMap.getLayer(arrowLayerId)) {
+      mlMap.addLayer({
+        id: arrowLayerId,
+        type: 'symbol',
+        source: sourceId,
+        minzoom: 12, // 可以設定從較近的 Zoom Level 開始顯示箭頭
+        maxzoom: 24,
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': 35, // 箭頭之間的距離密集度
+          'icon-image': [
+            'match',
+            ['get', 'ROAD_SATURATION_LEVEL'],
+            'TRAFFIC AVERAGE', 'arrow_blue',
+            'TRAFFIC GOOD', 'arrow_blue',
+            'arrow_orange'      // 預設箭頭
+          ],
+          'icon-size': 0.35,
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'icon-rotation-alignment': 'map',
+          'visibility': trafficSpeedVisible.value ? 'visible' : 'none'
+        }
+      })
+    }
+
+    // 確保圖層順序與顯示
+    mlMap.moveLayer(lineLayerId)
+    mlMap.moveLayer(arrowLayerId)
+    console.log('✨ [TrafficSpeed] 成功載入 trafficspeed 獨立圖層與動態箭頭！')
+
+  } catch (err) {
+    console.error('❌ [TrafficSpeed] 載入 trafficspeed.geojson 失敗:', err)
+  }
 }
 
 onMounted(async () => {
