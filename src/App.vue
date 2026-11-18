@@ -62,6 +62,11 @@
               <span class="layer-label">TrafficSpeed 獨立圖層</span>
               <input type="checkbox" v-model="trafficSpeedVisible" @change="toggleTrafficSpeedLayer" />
             </div>
+            <!-- 🟢 新增 NSR 獨立圖層開關 -->
+            <div class="info-row custom-layer-row">
+              <span class="layer-label">NSR 獨立圖層</span>
+              <input type="checkbox" v-model="nsrGeoJsonVisible" @change="toggleNsrGeoJson" />
+            </div>
             <!-- 控制 Map Label 文字大小 -->
             <div class="info-row custom-layer-row slider-row">
               <span class="layer-label">Label 字體: {{ labelTextSize }}px</span>
@@ -533,6 +538,9 @@ const captureMapInstance = (layer) => {
 
       initCustomGeoJsonLayers(mapInstance, realMlMap)
       initTrafficSpeedGeoJson(realMlMap)
+      // 🟢 初始化 nsr.geojson 獨立紫色線圖層
+      initNsrGeoJsonLayer(mapInstance, realMlMap)
+      
       extractAndGroupLayers()
     } else {
       setTimeout(checkInstance, 100)
@@ -583,7 +591,7 @@ const switchMapSource = () => {
 }
 
 // TrafficSpeed 獨立圖層開關（預設開啟）
-const trafficSpeedVisible = ref(true)
+const trafficSpeedVisible = ref(false)
 
 // 控制 TrafficSpeed 獨立圖層顯隱
 const toggleTrafficSpeedLayer = () => {
@@ -627,7 +635,7 @@ const initTrafficSpeedGeoJson = async (mlMap) => {
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
-          'visibility': trafficSpeedVisible.value ? 'visible' : 'none'
+          'visibility': 'none'
         },
         paint: {
           'line-width': 4,
@@ -665,7 +673,7 @@ const initTrafficSpeedGeoJson = async (mlMap) => {
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
           'icon-rotation-alignment': 'map',
-          'visibility': trafficSpeedVisible.value ? 'visible' : 'none'
+          'visibility': 'none'
         }
       })
     }
@@ -677,6 +685,137 @@ const initTrafficSpeedGeoJson = async (mlMap) => {
 
   } catch (err) {
     console.error('❌ [TrafficSpeed] 載入 trafficspeed.geojson 失敗:', err)
+  }
+}
+
+// NSR 獨立圖層開關（預設關閉）
+const nsrGeoJsonVisible = ref(false)
+
+// 儲存透明 Leaflet 互動 Layer 實例
+let nsrInteractiveLayer = null
+
+// 控制 NSR 顯隱（同時控制 MapLibre 視覺線與 Leaflet 透明互動線）
+const toggleNsrGeoJson = () => {
+  if (!realMlMap) return
+  const layerId = 'custom-nsr-maplibre-layer'
+  const visibility = nsrGeoJsonVisible.value ? 'visible' : 'none'
+  
+  // 1. 控制 MapLibre 顯示
+  if (realMlMap.getLayer(layerId)) {
+    realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
+  }
+
+  // 2. 控制 Leaflet 透明互動層顯示
+  if (mapInstance && nsrInteractiveLayer) {
+    if (nsrGeoJsonVisible.value) {
+      nsrInteractiveLayer.addTo(mapInstance)
+      nsrInteractiveLayer.bringToFront()
+    } else {
+      mapInstance.removeLayer(nsrInteractiveLayer)
+    }
+  }
+}
+
+// 載入並初始化 nsr.geojson (MapLibre 負責渲染 + Leaflet 負責透明 click 互動)
+const initNsrGeoJsonLayer = async (map, mlMap) => {
+  if (!mlMap) return
+  try {
+    const basePath = import.meta.env.BASE_URL || '/'
+    const res = await fetch(`${basePath}nsr.geojson`)
+    const geoJsonData = await res.json()
+
+    const sourceId = 'custom-nsr-source'
+    const layerId = 'custom-nsr-maplibre-layer'
+
+    // 1. 設定 MapLibre 來源與紫色視覺線條
+    if (mlMap.getSource(sourceId)) {
+      mlMap.getSource(sourceId).setData(geoJsonData)
+    } else {
+      mlMap.addSource(sourceId, {
+        type: 'geojson',
+        data: geoJsonData
+      })
+    }
+
+    if (!mlMap.getLayer(layerId)) {
+      mlMap.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        minzoom: 0,
+        maxzoom: 24,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'visibility': nsrGeoJsonVisible.value ? 'visible' : 'none'
+        },
+        paint: {
+          'line-width': 4,
+          'line-color': '#9b59b6' // 視覺上保持紫色線條
+        }
+      })
+    }
+
+    try {
+      mlMap.moveLayer(layerId)
+    } catch (e) {}
+
+    // 2. 建立專門負責 handle onclick 的「透明 Leaflet Interactive Layer」
+    const L = window.L
+    if (nsrInteractiveLayer && map.hasLayer(nsrInteractiveLayer)) {
+      map.removeLayer(nsrInteractiveLayer)
+    }
+
+    nsrInteractiveLayer = L.geoJSON(geoJsonData, {
+      style: {
+        color: '#000000',
+        weight: 18,     // 🟢 刻意設得較粗（18px），提供超大容錯範圍，盲點全消！
+        opacity: 0,     // 🟢 透明度設為 0（完全隱形，隻留事件觸發）
+        interactive: true
+      },
+      onEachFeature: (feature, layer) => {
+        const props = feature.properties || {}
+        const vehicleType = props.VEHICLE_TYPE ?? 'N/A'
+        const timeZone = props.TIMEZ_ZONE ?? 'N/A'
+        const effectiveDay = props.EFFECTIVE_DAY ?? 'N/A'
+
+        const popupHtml = `
+          <div style="font-family: sans-serif; font-size: 13px; line-height: 1.6; padding: 4px;">
+            <b style="color: #9b59b6;">📌 NSR Feature 屬性</b><br>
+            <b>VEHICLE_TYPE:</b> ${vehicleType}<br>
+            <b>TIMEZ_ZONE:</b> ${timeZone}<br>
+            <b>EFFECTIVE_DAY:</b> ${effectiveDay}
+          </div>
+        `
+
+        // 滑鼠移到線附近時游標變手型
+        layer.on('mouseover', () => {
+          map.getContainer().style.cursor = 'pointer'
+        })
+        layer.on('mouseout', () => {
+          map.getContainer().style.cursor = ''
+        })
+
+        // 🟢 100% 準確觸發點擊彈出 Bubble
+        layer.on('click', (e) => {
+          L.popup()
+            .setLatLng(e.latlng)
+            .setContent(popupHtml)
+            .addTo(map)
+        })
+      }
+    })
+
+    // 如果開關是開的，就加入地圖
+    if (nsrGeoJsonVisible.value) {
+      nsrInteractiveLayer.addTo(map)
+      nsrInteractiveLayer.bringToFront()
+    }
+
+    console.log('✨ [GeoJson] 成功建立 MapLibre 渲染 + Leaflet 透明點擊互動雙層架構！')
+
+  } catch (err) {
+    console.error('❌ [GeoJson] 載入 nsr.geojson 失敗:', err)
   }
 }
 
