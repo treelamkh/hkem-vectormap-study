@@ -56,12 +56,12 @@
               <span class="layer-label">MapLibre 點圖層</span>
               <input type="checkbox" v-model="maplibreGeoJsonVisible" @change="toggleMaplibreGeoJson" />
             </div>
-            <!-- 🟢 新增 TrafficSpeed 獨立圖層開關 -->
+            <!-- TrafficSpeed 獨立圖層開關 -->
             <div class="info-row custom-layer-row">
               <span class="layer-label">TrafficSpeed 獨立圖層</span>
               <input type="checkbox" v-model="trafficSpeedVisible" @change="toggleTrafficSpeedLayer" />
             </div>
-            <!-- 🟢 新增 NSR 獨立圖層開關 -->
+            <!-- NSR 獨立圖層開關 -->
             <div class="info-row custom-layer-row">
               <span class="layer-label">NSR 獨立圖層</span>
               <input type="checkbox" v-model="nsrGeoJsonVisible" @change="toggleNsrGeoJson" />
@@ -75,10 +75,10 @@
 
           <!-- 快速搜尋框 -->
           <div class="search-row">
-            <input 
-              type="text" 
-              v-model="searchKeyword" 
-              placeholder="🔍 快速搜尋 Layer Name..." 
+            <input
+              type="text"
+              v-model="searchKeyword"
+              placeholder="🔍 快速搜尋 Layer Name..."
               class="search-input"
             />
           </div>
@@ -99,7 +99,7 @@
                 {{ collapsedGroups[zoomLevel] ? '展開 +' : '收起 -' }}
               </button>
             </div>
-            
+
             <div class="zoom-content" v-show="!collapsedGroups[zoomLevel]">
               <div v-for="layer in layers" :key="layer.id" class="layer-item-row">
                 <!-- 圖層名稱與類型 -->
@@ -144,6 +144,12 @@ const isPanelMinimized = ref(false)
 const leafletGeoJsonVisible = ref(false)
 const maplibreGeoJsonVisible = ref(false)
 
+// TrafficSpeed 獨立圖層開關（預設關閉）
+const trafficSpeedVisible = ref(false)
+
+// NSR 獨立圖層開關（預設關閉）
+const nsrGeoJsonVisible = ref(false)
+
 // 調整大小的響應式變數
 const labelTextSize = ref(12)
 
@@ -162,41 +168,73 @@ let currentActiveLayer = null
 // Leaflet 獨立 GeoJSON Layer 實例
 let leafletGeoJsonLayer = null
 
+// 儲存透明 Leaflet 互動 Layer 實例
+let nsrInteractiveLayer = null
+
 // 儲存按 Zoom Level 分類的動態圖層清單
 const dynamicLayersByZoom = ref({})
 
-// 🟢 確保底層有柔和的背景色（避免高速縮放露底時過於刺眼）
+// 將顏色標準化為 6 位 #rrggbb hex，避免 <input type="color"> 警告
+const toHexColor = (val, fallback = '#3388ff') => {
+  if (typeof val !== 'string') return fallback
+  const trimmed = val.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed
+  const match = trimmed.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i)
+  if (!match) return fallback
+  const toHex = (n) => Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0')
+  return `#${toHex(match[1])}${toHex(match[2])}${toHex(match[3])}`
+}
+
+// 確保底層有柔和的背景色（避免高速縮放露底時過於刺眼）
 const ensureBackgroundColor = (mlMap, color = '#eef0f2') => {
   if (!mlMap || typeof mlMap.getStyle !== 'function') return
 
-  const layers = mlMap.getStyle()?.layers || []
-  const bgLayers = layers.filter(layer => layer.type === 'background')
+  const apply = () => {
+    try {
+      if (!mlMap.isStyleLoaded()) return
+      const style = mlMap.getStyle()
+      const layers = style?.layers || []
+      if (!layers.length) return
 
-  if (bgLayers.length > 0) {
-    bgLayers.forEach(layer => {
-      try {
-        mlMap.setPaintProperty(layer.id, 'background-color', color)
-      } catch (err) {
-        console.warn('⚠️ [BG Color] 更新 background layer 失敗:', layer.id, err)
+      const bgLayers = layers.filter(layer => layer.type === 'background')
+      if (bgLayers.length > 0) {
+        bgLayers.forEach(layer => {
+          try {
+            mlMap.setPaintProperty(layer.id, 'background-color', color)
+          } catch (err) {
+            console.warn('⚠️ [BG Color] 更新 background layer 失敗:', layer.id, err)
+          }
+        })
+        return
       }
-    })
-    return
+
+      const firstLayerId = layers[0]?.id
+      if (!mlMap.getLayer('custom-fallback-bg')) {
+        mlMap.addLayer(
+          {
+            id: 'custom-fallback-bg',
+            type: 'background',
+            paint: {
+              'background-color': color
+            }
+          },
+          firstLayerId
+        )
+      } else {
+        mlMap.setPaintProperty('custom-fallback-bg', 'background-color', color)
+        try {
+          mlMap.moveLayer('custom-fallback-bg', firstLayerId)
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn('⚠️ [BG Color] 延後重試或略過:', err?.message || err)
+    }
   }
 
-  if (!mlMap.getLayer('custom-fallback-bg')) {
-    const firstLayerId = layers[0]?.id
-    mlMap.addLayer(
-      {
-        id: 'custom-fallback-bg',
-        type: 'background',
-        paint: {
-          'background-color': color
-        }
-      },
-      firstLayerId
-    )
+  if (mlMap.isStyleLoaded()) {
+    apply()
   } else {
-    mlMap.setPaintProperty('custom-fallback-bg', 'background-color', color)
+    mlMap.once('styledata', apply)
   }
 }
 
@@ -209,7 +247,7 @@ const filteredLayersByZoom = computed(() => {
   const result = {}
 
   Object.keys(dynamicLayersByZoom.value).forEach(zoomLevel => {
-    const matchedLayers = dynamicLayersByZoom.value[zoomLevel].filter(layer => 
+    const matchedLayers = dynamicLayersByZoom.value[zoomLevel].filter(layer =>
       layer.id.toLowerCase().includes(keyword)
     )
     if (matchedLayers.length > 0) {
@@ -250,16 +288,7 @@ const toggleMaplibreGeoJson = () => {
   }
 }
 
-// 3. 即時調整 tlamp20.png Icon 大小
-const updateTlampIconSize = () => {
-  if (!realMlMap) return
-  const layerId = 'PPISLAMP'
-  if (realMlMap.getLayer(layerId)) {
-    realMlMap.setLayoutProperty(layerId, 'icon-size', tlampIconSize.value)
-  }
-}
-
-// 4. 即時調整 Map Label 字體大小
+// 3. 即時調整 Map Label 字體大小
 const updateLabelTextSize = () => {
   if (!realMlMap) return
   const style = realMlMap.getStyle()
@@ -305,7 +334,7 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
         }
       }
     })
-    
+
     if (leafletGeoJsonVisible.value) {
       leafletGeoJsonLayer.addTo(map)
       leafletGeoJsonLayer.bringToFront()
@@ -345,7 +374,6 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
     mlMap.moveLayer(layerId)
 
     console.log('✨ [GeoJson] 成功載入 3DPN 點圖層！')
-
   } catch (err) {
     console.error('❌ [GeoJson] 載入失敗:', err)
   }
@@ -355,8 +383,7 @@ const initCustomGeoJsonLayers = async (map, mlMap) => {
 const setupCustomIcons = (mlMap) => {
   if (!mlMap) return
   const basePath = import.meta.env.BASE_URL || '/'
-  
-  // 1. 保留原本其他 UI icon 載入
+
   const icons = [
     { name: 'tlamp20', filename: 'tlamp20.png' },
     { name: 'walk30', filename: 'walk30.png' },
@@ -374,18 +401,15 @@ const setupCustomIcons = (mlMap) => {
     }
   })
 
-  // 2. 用程式碼動態繪製箭頭
   const createArrowImage = (color) => {
     const size = 48
     const canvas = document.createElement('canvas')
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')
-    
-    // 確保完全透明背景
+
     ctx.clearRect(0, 0, size, size)
-    
-    // 繪製箭頭形狀
+
     ctx.fillStyle = color
     ctx.beginPath()
     ctx.moveTo(8, 6)
@@ -483,7 +507,7 @@ const extractAndGroupLayers = () => {
       id: layer.id,
       type: type,
       visible: realMlMap.getLayoutProperty(layer.id, 'visibility') !== 'none',
-      color: typeof defaultColor === 'string' ? defaultColor : '#3388ff',
+      color: toHexColor(defaultColor, '#3388ff'),
       width: typeof defaultWidth === 'number' ? defaultWidth : 2,
       hasColor: hasColor || type === 'line' || type === 'fill' || type === 'circle',
       hasWidth: hasWidth || type === 'line' || type === 'circle'
@@ -530,7 +554,6 @@ const updateLayerWidth = (layer) => {
 const captureMapInstance = (layer) => {
   if (!layer) return
 
-  // 內部直接定義查找函式，避免 ReferenceError
   const findInstance = () => {
     if (typeof layer.getMaplibreMap === 'function' && layer.getMaplibreMap()) {
       return layer.getMaplibreMap()
@@ -551,10 +574,7 @@ const captureMapInstance = (layer) => {
       realMlMap = instance
       window.mlMap = realMlMap
 
-      // 🟢 確保底色喺 style 載入及每次 styledata 更新時都保持柔和底色
-      if (realMlMap.isStyleLoaded()) {
-        ensureBackgroundColor(realMlMap, '#eef0f2')
-      }
+      ensureBackgroundColor(realMlMap, '#eef0f2')
       if (!realMlMap._bgColorListenerAdded) {
         realMlMap._bgColorListenerAdded = true
         realMlMap.on('styledata', () => {
@@ -583,9 +603,8 @@ const captureMapInstance = (layer) => {
 
       initCustomGeoJsonLayers(mapInstance, realMlMap)
       initTrafficSpeedGeoJson(realMlMap)
-      // 🟢 初始化 nsr.geojson 獨立紫色線圖層
       initNsrGeoJsonLayer(mapInstance, realMlMap)
-      
+
       extractAndGroupLayers()
     } else {
       setTimeout(checkInstance, 100)
@@ -636,16 +655,15 @@ const switchMapSource = () => {
   }, 300)
 }
 
-// TrafficSpeed 獨立圖層開關（預設關閉）
-const trafficSpeedVisible = ref(false)
-
 // 控制 TrafficSpeed 獨立圖層顯隱
 const toggleTrafficSpeedLayer = () => {
   if (!realMlMap) return
-  const layerId = 'traffic-speed-line-layer'
-  if (realMlMap.getLayer(layerId)) {
-    const visibility = trafficSpeedVisible.value ? 'visible' : 'none'
-    realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
+  const visibility = trafficSpeedVisible.value ? 'visible' : 'none'
+  if (realMlMap.getLayer('traffic-speed-line-layer')) {
+    realMlMap.setLayoutProperty('traffic-speed-line-layer', 'visibility', visibility)
+  }
+  if (realMlMap.getLayer('traffic-speed-arrow-layer')) {
+    realMlMap.setLayoutProperty('traffic-speed-arrow-layer', 'visibility', visibility)
   }
 }
 
@@ -660,6 +678,7 @@ const initTrafficSpeedGeoJson = async (mlMap) => {
     const sourceId = 'traffic-speed-source'
     const lineLayerId = 'traffic-speed-line-layer'
     const arrowLayerId = 'traffic-speed-arrow-layer'
+    const initialVisibility = trafficSpeedVisible.value ? 'visible' : 'none'
 
     if (mlMap.getSource(sourceId)) {
       mlMap.getSource(sourceId).setData(geoJsonData)
@@ -670,7 +689,6 @@ const initTrafficSpeedGeoJson = async (mlMap) => {
       })
     }
 
-    // 1. 新增底線圖層 (根據 ROAD_SATURATION_LEVEL 顯示綠、黃、紅)
     if (!mlMap.getLayer(lineLayerId)) {
       mlMap.addLayer({
         id: lineLayerId,
@@ -681,77 +699,66 @@ const initTrafficSpeedGeoJson = async (mlMap) => {
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
-          'visibility': 'none'
+          'visibility': initialVisibility
         },
         paint: {
           'line-width': 4,
           'line-color': [
             'match',
             ['get', 'ROAD_SATURATION_LEVEL'],
-            'TRAFFIC GOOD', '#2ed573',     // 綠色
-            'TRAFFIC AVERAGE', '#ffa500',  // 黃色
-            'TRAFFIC BAD', '#ff4757',      // 紅色
-            '#ced6e0'                      // 預設顏色
+            'TRAFFIC GOOD', '#2ed573',
+            'TRAFFIC AVERAGE', '#ffa500',
+            'TRAFFIC BAD', '#ff4757',
+            '#ced6e0'
           ]
         }
       })
     }
 
-    // 2. 🟢 新增沿線方向箭頭符號圖層 (套用 createArrowImage 產生的箭頭)
     if (!mlMap.getLayer(arrowLayerId)) {
       mlMap.addLayer({
         id: arrowLayerId,
         type: 'symbol',
         source: sourceId,
-        minzoom: 12, // 可以設定從較近的 Zoom Level 開始顯示箭頭
+        minzoom: 12,
         maxzoom: 24,
         layout: {
           'symbol-placement': 'line',
-          'symbol-spacing': 35, // 箭頭之間的距離密集度
+          'symbol-spacing': 35,
           'icon-image': [
             'match',
             ['get', 'ROAD_SATURATION_LEVEL'],
             'TRAFFIC AVERAGE', 'arrow_blue',
             'TRAFFIC GOOD', 'arrow_blue',
-            'arrow_orange'      // 預設箭頭
+            'arrow_orange'
           ],
           'icon-size': 0.35,
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
           'icon-rotation-alignment': 'map',
-          'visibility': 'none'
+          'visibility': initialVisibility
         }
       })
     }
 
-    // 確保圖層順序與顯示
     mlMap.moveLayer(lineLayerId)
     mlMap.moveLayer(arrowLayerId)
     console.log('✨ [TrafficSpeed] 成功載入 trafficspeed 獨立圖層與動態箭頭！')
-
   } catch (err) {
     console.error('❌ [TrafficSpeed] 載入 trafficspeed.geojson 失敗:', err)
   }
 }
-
-// NSR 獨立圖層開關（預設關閉）
-const nsrGeoJsonVisible = ref(false)
-
-// 儲存透明 Leaflet 互動 Layer 實例
-let nsrInteractiveLayer = null
 
 // 控制 NSR 顯隱（同時控制 MapLibre 視覺線與 Leaflet 透明互動線）
 const toggleNsrGeoJson = () => {
   if (!realMlMap) return
   const layerId = 'custom-nsr-maplibre-layer'
   const visibility = nsrGeoJsonVisible.value ? 'visible' : 'none'
-  
-  // 1. 控制 MapLibre 顯示
+
   if (realMlMap.getLayer(layerId)) {
     realMlMap.setLayoutProperty(layerId, 'visibility', visibility)
   }
 
-  // 2. 控制 Leaflet 透明互動層顯示
   if (mapInstance && nsrInteractiveLayer) {
     if (nsrGeoJsonVisible.value) {
       nsrInteractiveLayer.addTo(mapInstance)
@@ -773,7 +780,6 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
     const sourceId = 'custom-nsr-source'
     const layerId = 'custom-nsr-maplibre-layer'
 
-    // 1. 設定 MapLibre 來源與紫色視覺線條
     if (mlMap.getSource(sourceId)) {
       mlMap.getSource(sourceId).setData(geoJsonData)
     } else {
@@ -797,7 +803,7 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
         },
         paint: {
           'line-width': 4,
-          'line-color': '#9b59b6' // 視覺上保持紫色線條
+          'line-color': '#9b59b6'
         }
       })
     }
@@ -806,7 +812,6 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
       mlMap.moveLayer(layerId)
     } catch (e) {}
 
-    // 2. 建立專門負責 handle onclick 的「透明 Leaflet Interactive Layer」
     const L = window.L
     if (nsrInteractiveLayer && map.hasLayer(nsrInteractiveLayer)) {
       map.removeLayer(nsrInteractiveLayer)
@@ -815,8 +820,8 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
     nsrInteractiveLayer = L.geoJSON(geoJsonData, {
       style: {
         color: '#000000',
-        weight: 18,     // 🟢 刻意設得較粗（18px），提供超大容錯範圍，盲點全消！
-        opacity: 0,     // 🟢 透明度設為 0（完全隱形，隻留事件觸發）
+        weight: 18,
+        opacity: 0,
         interactive: true
       },
       onEachFeature: (feature, layer) => {
@@ -834,7 +839,6 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
           </div>
         `
 
-        // 滑鼠移到線附近時游標變手型
         layer.on('mouseover', () => {
           map.getContainer().style.cursor = 'pointer'
         })
@@ -842,7 +846,6 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
           map.getContainer().style.cursor = ''
         })
 
-        // 🟢 100% 準確觸發點擊彈出 Bubble
         layer.on('click', (e) => {
           L.popup()
             .setLatLng(e.latlng)
@@ -852,14 +855,12 @@ const initNsrGeoJsonLayer = async (map, mlMap) => {
       }
     })
 
-    // 如果開關是開的，就加入地圖
     if (nsrGeoJsonVisible.value) {
       nsrInteractiveLayer.addTo(map)
       nsrInteractiveLayer.bringToFront()
     }
 
     console.log('✨ [GeoJson] 成功建立 MapLibre 渲染 + Leaflet 透明點擊互動雙層架構！')
-
   } catch (err) {
     console.error('❌ [GeoJson] 載入 nsr.geojson 失敗:', err)
   }
@@ -890,15 +891,15 @@ onMounted(async () => {
       reqUrl = reqUrl.replace(/LianHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
                      .replace(/LianHeiHK Bold/g, 'Noto Sans Bold')
                      .replace(/LianHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/LianHeiHK Regular/g, 'Noto%20Sans%20Regular')
+                     .replace(/LianHeiHK Regular/g, 'Noto Sans Regular')
                      .replace(/CyansHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
                      .replace(/CyansHeiHK Bold/g, 'Noto Sans Bold')
                      .replace(/CyansHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/CyansHeiHK Regular/g, 'Noto%20Sans%20Regular')
+                     .replace(/CyansHeiHK Regular/g, 'Noto Sans Regular')
                      .replace(/Arial%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/Arial Regular/g, 'Noto%20Sans%20Regular')
+                     .replace(/Arial Regular/g, 'Noto Sans Regular')
                      .replace(/Arial%20Bold/g, 'Noto%20Sans%20Bold')
-                     .replace(/Arial Bold/g, 'Noto%20Sans%20Bold')
+                     .replace(/Arial Bold/g, 'Noto Sans Bold')
                      .replace(/Arial/g, 'Noto%20Sans%20Regular')
     }
     return { url: reqUrl }
@@ -978,7 +979,7 @@ onMounted(async () => {
   try {
     const styLabelUrl = 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/resources/styles/root.json'
     const [resL1, resL2, resL3] = await Promise.all([fetch(styLabelUrl), fetch(styLabelUrl), fetch(styLabelUrl)])
-    
+
     const [t1, t2, t3] = await Promise.all([resL1.text(), resL2.text(), resL3.text()])
     const fixText = (txt) => txt.replace(/\.\.\/\.\.\/|\.\.\/|\.\.\/\.\.\/\.\.\//g, 'https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84/')
 
@@ -1007,20 +1008,19 @@ onMounted(async () => {
     setupLabels(mapStyleLandsD, label1, 'hk_label_landsd')
     setupLabels(mapStyleHkem, label2, 'hk_label_hkem')
     setupLabels(mapStyleDebug, label3, 'hk_label_dbg')
-
   } catch (err) {
     console.error('❌ [Label Style] 載入失敗:', err)
   }
 
   // 5. 建立圖層實例
   if (mapStyleLandsD) {
-    glLayerLandsD = L.maplibreGL({ style: mapStyleLandsD, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 0, mapOptions: {maxTileCacheSize: 100}})
+    glLayerLandsD = L.maplibreGL({ style: mapStyleLandsD, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 0, mapOptions: { maxTileCacheSize: 100 } })
   }
   if (mapStyleHkem) {
-    glLayerHkem = L.maplibreGL({ style: mapStyleHkem, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 0, mapOptions: {maxTileCacheSize: 100}})
+    glLayerHkem = L.maplibreGL({ style: mapStyleHkem, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 0, mapOptions: { maxTileCacheSize: 100 } })
   }
   if (mapStyleDebug) {
-    glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 0, mapOptions: {maxTileCacheSize: 100}})
+    glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 0, mapOptions: { maxTileCacheSize: 100 } })
   }
 
   // 預設載入 LandsD
@@ -1041,37 +1041,47 @@ onUnmounted(() => {
   position: relative;
   width: 100vw;
   height: 100vh;
+  overflow: hidden;
 }
+
 #map {
   width: 100%;
   height: 100%;
 }
+
 .control-panel {
   position: absolute;
   top: 10px;
   left: 10px;
-  background: white;
+  background: rgba(255, 255, 255, 0.96);
   padding: 12px;
   border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  max-height: 85vh;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 88vh;
   width: 350px;
   display: flex;
   flex-direction: column;
   z-index: 1000;
-  font-family: sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  color: #2c3e50;
+  box-sizing: border-box;
   transition: width 0.2s ease, padding 0.2s ease;
 }
+
 .control-panel.minimized {
   width: 180px;
   max-height: auto;
   padding: 8px 12px;
 }
+
 .panel-header {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
+
 .panel-title-row {
   display: flex;
   align-items: center;
@@ -1080,14 +1090,222 @@ onUnmounted(() => {
   font-size: 13px;
   color: #2c3e50;
 }
+
 .minimize-btn {
   background: #dfe4ea;
   border: none;
   border-radius: 4px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   font-size: 11px;
   cursor: pointer;
   color: #2f3640;
   font-weight: bold;
+}
+
+.minimize-btn:hover {
+  background: #ced6e0;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  gap: 8px;
+}
+
+.checkbox-row {
+  justify-content: flex-start;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.info-row select {
+  padding: 3px 6px;
+  border: 1px solid #ced6e0;
+  border-radius: 4px;
+  font-size: 12px;
+  background: #fff;
+}
+
+.zoom-badge {
+  background: #2c3e50;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 11px;
+}
+
+.gyro-btn {
+  background: #f1f2f6;
+  border: 1px solid #ced6e0;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #2f3640;
+}
+
+.gyro-btn.active {
+  background: #2ed573;
+  border-color: #2ed573;
+  color: #fff;
+  font-weight: bold;
+}
+
+.custom-layers-section {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+}
+
+.section-title {
+  font-weight: bold;
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #34495e;
+}
+
+.custom-layer-row {
+  margin-top: 4px;
+}
+
+.layer-label {
+  font-size: 12px;
+  color: #2f3542;
+}
+
+.slider-row input[type="range"] {
+  width: 130px;
+}
+
+.search-row {
+  margin-top: 8px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ced6e0;
+  border-radius: 4px;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.control-panel hr {
+  border: none;
+  border-top: 1px solid #e1e4e8;
+  margin: 8px 0;
+  flex-shrink: 0;
+}
+
+.layer-groups-container {
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.zoom-group-box {
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.zoom-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f1f2f6;
+  padding: 6px 8px;
+  font-weight: bold;
+  font-size: 11px;
+  color: #2f3542;
+}
+
+.toggle-btn {
+  background: #fff;
+  border: 1px solid #ced6e0;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.zoom-content {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.layer-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed #f1f2f6;
+}
+
+.layer-item-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.layer-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.layer-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: #2f3542;
+}
+
+.layer-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.layer-controls input[type="color"] {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.width-control input[type="range"] {
+  width: 60px;
+}
+
+.width-val {
+  font-size: 10px;
+  color: #57606f;
+  width: 28px;
+  text-align: right;
 }
 </style>
