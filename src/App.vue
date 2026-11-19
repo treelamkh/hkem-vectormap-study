@@ -46,7 +46,6 @@
           </div>
 
           <!-- 自訂 GeoJSON 獨立控制專區 -->
-          <!-- 自訂 GeoJSON 獨立控制專區 -->
           <div class="custom-layers-section">
             <div class="section-title">📍 圖層控制 (GeoJSON)</div>
             <div class="info-row custom-layer-row">
@@ -165,6 +164,41 @@ let leafletGeoJsonLayer = null
 
 // 儲存按 Zoom Level 分類的動態圖層清單
 const dynamicLayersByZoom = ref({})
+
+// 🟢 確保底層有柔和的背景色（避免高速縮放露底時過於刺眼）
+const ensureBackgroundColor = (mlMap, color = '#eef0f2') => {
+  if (!mlMap || typeof mlMap.getStyle !== 'function') return
+
+  const layers = mlMap.getStyle()?.layers || []
+  const bgLayers = layers.filter(layer => layer.type === 'background')
+
+  if (bgLayers.length > 0) {
+    bgLayers.forEach(layer => {
+      try {
+        mlMap.setPaintProperty(layer.id, 'background-color', color)
+      } catch (err) {
+        console.warn('⚠️ [BG Color] 更新 background layer 失敗:', layer.id, err)
+      }
+    })
+    return
+  }
+
+  if (!mlMap.getLayer('custom-fallback-bg')) {
+    const firstLayerId = layers[0]?.id
+    mlMap.addLayer(
+      {
+        id: 'custom-fallback-bg',
+        type: 'background',
+        paint: {
+          'background-color': color
+        }
+      },
+      firstLayerId
+    )
+  } else {
+    mlMap.setPaintProperty('custom-fallback-bg', 'background-color', color)
+  }
+}
 
 // 計算屬性：根據搜尋關鍵字即時過濾圖層
 const filteredLayersByZoom = computed(() => {
@@ -517,6 +551,17 @@ const captureMapInstance = (layer) => {
       realMlMap = instance
       window.mlMap = realMlMap
 
+      // 🟢 確保底色喺 style 載入及每次 styledata 更新時都保持柔和底色
+      if (realMlMap.isStyleLoaded()) {
+        ensureBackgroundColor(realMlMap, '#eef0f2')
+      }
+      if (!realMlMap._bgColorListenerAdded) {
+        realMlMap._bgColorListenerAdded = true
+        realMlMap.on('styledata', () => {
+          ensureBackgroundColor(realMlMap, '#eef0f2')
+        })
+      }
+
       setupCustomIcons(realMlMap)
 
       try {
@@ -585,12 +630,13 @@ const switchMapSource = () => {
   setTimeout(() => {
     if (realMlMap) {
       realMlMap.resize()
+      ensureBackgroundColor(realMlMap, '#eef0f2')
       extractAndGroupLayers()
     }
   }, 300)
 }
 
-// TrafficSpeed 獨立圖層開關（預設開啟）
+// TrafficSpeed 獨立圖層開關（預設關閉）
 const trafficSpeedVisible = ref(false)
 
 // 控制 TrafficSpeed 獨立圖層顯隱
@@ -844,15 +890,15 @@ onMounted(async () => {
       reqUrl = reqUrl.replace(/LianHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
                      .replace(/LianHeiHK Bold/g, 'Noto Sans Bold')
                      .replace(/LianHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/LianHeiHK Regular/g, 'Noto Sans Regular')
+                     .replace(/LianHeiHK Regular/g, 'Noto%20Sans%20Regular')
                      .replace(/CyansHeiHK%20Bold/g, 'Noto%20Sans%20Bold')
                      .replace(/CyansHeiHK Bold/g, 'Noto Sans Bold')
                      .replace(/CyansHeiHK%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/CyansHeiHK Regular/g, 'Noto Sans Regular')
+                     .replace(/CyansHeiHK Regular/g, 'Noto%20Sans%20Regular')
                      .replace(/Arial%20Regular/g, 'Noto%20Sans%20Regular')
-                     .replace(/Arial Regular/g, 'Noto Sans Regular')
+                     .replace(/Arial Regular/g, 'Noto%20Sans%20Regular')
                      .replace(/Arial%20Bold/g, 'Noto%20Sans%20Bold')
-                     .replace(/Arial Bold/g, 'Noto Sans Bold')
+                     .replace(/Arial Bold/g, 'Noto%20Sans%20Bold')
                      .replace(/Arial/g, 'Noto%20Sans%20Regular')
     }
     return { url: reqUrl }
@@ -1043,166 +1089,5 @@ onUnmounted(() => {
   cursor: pointer;
   color: #2f3640;
   font-weight: bold;
-}
-.minimize-btn:hover {
-  background: #ced6e0;
-}
-.info-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  font-weight: bold;
-}
-.checkbox-row {
-  justify-content: flex-start;
-  background: #f8f9fa;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid #e9ecef;
-}
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  color: #2c3e50;
-}
-.zoom-badge {
-  background: #34495e;
-  color: white;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-.gyro-btn {
-  background: #f1f2f6;
-  border: 1px solid #dcdde1;
-  border-radius: 4px;
-  padding: 3px 8px;
-  font-size: 11px;
-  cursor: pointer;
-  color: #2f3640;
-  font-weight: bold;
-}
-.gyro-btn.active {
-  background: #2ed573;
-  color: white;
-  border-color: #26af5f;
-}
-.custom-layers-section {
-  background: #f1f2f6;
-  padding: 8px;
-  border-radius: 6px;
-  margin-top: 4px;
-  border: 1px solid #dfe4ea;
-}
-.section-title {
-  font-size: 11px;
-  color: #2c3e50;
-  margin-bottom: 4px;
-  font-weight: bold;
-}
-.custom-layer-row {
-  font-size: 11px;
-  font-weight: normal;
-  margin-top: 4px;
-}
-.slider-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.slider-row input[type="range"] {
-  width: 120px;
-}
-.layer-label {
-  color: #333;
-}
-.search-row {
-  margin-top: 4px;
-}
-.search-input {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid #dcdde1;
-  border-radius: 4px;
-  font-size: 12px;
-  box-sizing: border-box;
-}
-.layer-groups-container {
-  overflow-y: auto;
-  flex: 1;
-  margin-top: 8px;
-  padding-right: 4px;
-}
-.zoom-group-box {
-  margin-bottom: 10px;
-  background: #f8f9fa;
-  padding: 8px;
-  border-radius: 6px;
-  border: 1px solid #e9ecef;
-}
-.zoom-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-  border-bottom: 1px solid #dee2e6;
-  padding-bottom: 4px;
-}
-.zoom-group-title {
-  font-weight: bold;
-  font-size: 11px;
-  color: #2c3e50;
-}
-.toggle-btn {
-  background: #dfe4ea;
-  border: none;
-  border-radius: 3px;
-  padding: 2px 6px;
-  font-size: 10px;
-  cursor: pointer;
-  color: #2f3640;
-}
-.toggle-btn:hover {
-  background: #ced6e0;
-}
-.layer-item-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  margin-bottom: 6px;
-}
-.layer-info {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 150px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-.layer-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.layer-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.width-control {
-  gap: 2px;
-}
-.width-control input[type="range"] {
-  width: 50px;
-}
-.width-val {
-  font-size: 10px;
-  width: 25px;
-  text-align: right;
 }
 </style>
