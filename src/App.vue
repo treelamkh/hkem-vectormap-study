@@ -968,13 +968,13 @@ onMounted(async () => {
 
   // 5. 建立圖層實例
   if (mapStyleLandsD) {
-    glLayerLandsD = L.maplibreGL({ style: mapStyleLandsD, maxZoom: 20, transformRequest: fontTransform })
+    glLayerLandsD = L.maplibreGL({ style: mapStyleLandsD, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 50, mapOptions: {maxTileCacheSize: 250}})
   }
   if (mapStyleHkem) {
-    glLayerHkem = L.maplibreGL({ style: mapStyleHkem, maxZoom: 20, transformRequest: fontTransform })
+    glLayerHkem = L.maplibreGL({ style: mapStyleHkem, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 50, mapOptions: {maxTileCacheSize: 250}})
   }
   if (mapStyleDebug) {
-    glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform })
+    glLayerDebug = L.maplibreGL({ style: mapStyleDebug, maxZoom: 20, transformRequest: fontTransform, fadeDuration: 50, mapOptions: {maxTileCacheSize: 250}})
   }
 
   // 預設載入 LandsD
